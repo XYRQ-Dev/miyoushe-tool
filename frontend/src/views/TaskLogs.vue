@@ -45,9 +45,9 @@
           </template>
         </el-table-column>
         <el-table-column v-if="!compactMode" label="角色" prop="game_nickname" min-width="140" show-overflow-tooltip />
-        <el-table-column label="状态" :width="compactMode ? 88 : 100">
+        <el-table-column label="状态" :width="compactMode ? 92 : 108" align="center">
           <template #default="{ row }">
-            <StatusBadge :status="row.status" />
+            <StatusBadge :status="row.status" :compact="compactMode" />
           </template>
         </el-table-column>
         <el-table-column label="详情" :min-width="compactMode ? 240 : 320">

@@ -60,6 +60,17 @@ CHECKIN_GAME_CONFIGS: dict[str, CheckinGameConfig] = {
     "hkrpg_cn": CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
     "hkrpg_bilibili": CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
 }
+SUPPORTED_CHECKIN_BIZ = tuple(CHECKIN_GAME_CONFIGS.keys())
+
+
+def is_checkin_supported_game(game_biz: str) -> bool:
+    """
+    当前仅原神与星穹铁道的国服签到链路已完成适配。
+
+    绝区零、崩坏3 等角色即便已通过账号导入拿到，也不能误导性地继续走签到流程，
+    否则最坏情况不是“签到失败”，而是向未验证接口发请求并制造脏日志。
+    """
+    return game_biz in CHECKIN_GAME_CONFIGS
 
 
 class CheckinApiError(Exception):
@@ -119,12 +130,13 @@ class CheckinService:
                     select(GameRole).where(
                         GameRole.account_id == account.id,
                         GameRole.is_enabled.is_(True),
+                        GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
                     )
                 )
                 roles = roles_result.scalars().all()
 
                 if not roles:
-                    logger.info("账号 %s 没有启用的游戏角色，跳过", account.id)
+                    logger.info("账号 %s 没有已启用且已适配签到的游戏角色，跳过", account.id)
                     continue
 
                 for role in roles:

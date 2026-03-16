@@ -19,7 +19,7 @@ from app.schemas.task_log import (
     TaskConfigCreate, TaskConfigResponse, CheckinSummary,
 )
 from app.api.auth import get_current_user
-from app.services.checkin import CheckinService
+from app.services.checkin import CheckinService, SUPPORTED_CHECKIN_BIZ
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tasks", tags=["任务管理"])
@@ -126,6 +126,7 @@ async def get_today_status(
         select(func.count(GameRole.id)).where(
             GameRole.account_id.in_(account_ids),
             GameRole.is_enabled == True,
+            GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
         )
     )
     total_roles = roles_result.scalar() or 0

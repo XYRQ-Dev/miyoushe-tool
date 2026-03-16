@@ -144,6 +144,28 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         service._sleep_between_info_and_sign.assert_awaited_once()
         service._sleep_between_roles.assert_awaited_once()
 
+    async def test_execute_for_user_skips_unsupported_games_without_logging_failure(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            session.add(GameRole(account_id=account.id, game_biz="nap_cn", game_uid="20001", region="prod_gf_jp", is_enabled=True))
+            session.add(GameRole(account_id=account.id, game_biz="bh3_cn", game_uid="30001", region="android01", is_enabled=True))
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._get_sign_info = AsyncMock()
+            service._do_sign = AsyncMock()
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.total, 0)
+        self.assertEqual(summary.failed, 0)
+        service._get_sign_info.assert_not_awaited()
+        service._do_sign.assert_not_awaited()
+
     async def test_refresh_device_fp_accepts_real_world_payload_shape(self):
         async with await self._new_session() as session:
             service = CheckinService(session)

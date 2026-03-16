@@ -23,6 +23,7 @@
         <div v-for="role in account.game_roles" :key="role.id" class="role-item">
           <span class="role-game">{{ gameNames[role.game_biz] || role.game_biz }}</span>
           <span class="role-name">{{ role.nickname || role.game_uid }}</span>
+          <span v-if="!isCheckinSupported(role.game_biz)" class="role-unsupported">签到未适配</span>
           <span class="role-level">Lv.{{ role.level || '?' }}</span>
         </div>
       </div>
@@ -60,6 +61,12 @@ const gameNames: Record<string, string> = {
   hkrpg_bilibili: '星铁(B服)',
   nap_cn: '绝区零',
   bh3_cn: '崩坏3',
+}
+
+const supportedCheckinGames = new Set(['hk4e_cn', 'hk4e_bilibili', 'hkrpg_cn', 'hkrpg_bilibili'])
+
+function isCheckinSupported(gameBiz: string) {
+  return supportedCheckinGames.has(gameBiz)
 }
 
 const avatarColor = computed(() => {
@@ -186,6 +193,16 @@ const statusText = computed(() => {
 .role-level {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.role-unsupported {
+  font-size: 11px;
+  color: #b7791f;
+  background: linear-gradient(135deg, #fff7e6 0%, #ffefcc 100%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(221, 107, 32, 0.18);
+  white-space: nowrap;
 }
 
 .card-actions {
