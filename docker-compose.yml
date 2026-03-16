@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    container_name: miyoushe-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # SQLite 数据库文件持久化到宿主机
+      - ./data:/app/data
+    environment:
+      # JWT 签名密钥（生产环境必须修改为强随机值）
+      - SECRET_KEY=${SECRET_KEY:-change_me_to_a_strong_random_string}
+      # Cookie 加密密钥（生产环境必须修改）
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change_me_to_another_strong_random_string}
+      # 数据库路径
+      - DATABASE_URL=sqlite+aiosqlite:///./data/miyoushe.db
+      # SMTP 邮件配置（按需填写）
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-true}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    container_name: miyoushe-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
