@@ -314,7 +314,13 @@ class CheckinService:
             changed = True
 
         if not config.hyperion_device_fp:
-            config.hyperion_device_fp = await self._refresh_device_fp(client, config.hyperion_device_id)
+            try:
+                config.hyperion_device_fp = await self._refresh_device_fp(client, config.hyperion_device_id)
+            except Exception as exc:
+                # 设备指纹接口本身并不稳定，且其失败不应该把整个手动签到接口打成 500。
+                # 这里退回本地生成的占位 device_fp，至少保证任务能继续执行并把真实签到结果写入日志。
+                logger.warning("获取设备指纹失败，退回本地生成的设备指纹继续执行: %s", exc)
+                config.hyperion_device_fp = generate_device_fp()
             config.hyperion_device_fp_updated_at = datetime.utcnow()
             changed = True
 
@@ -342,9 +348,13 @@ class CheckinService:
             },
         )
         data = response.json()
-        if data.get("code") != 200 or not data.get("device_fp"):
+        # 线上接口的真实返回是：
+        # {"retcode":0,"message":"OK","data":{"device_fp":"xxx","code":403,"msg":"传入的参数有误"}}
+        # 也就是说，只要顶层成功且给出了 device_fp，就应该接受该值，不能误把 data.code 当成整体失败。
+        device_fp = data.get("device_fp") or (data.get("data") or {}).get("device_fp")
+        if data.get("retcode") != 0 or not device_fp:
             raise RuntimeError(f"获取设备指纹失败: {data.get('message') or data}")
-        return str(data["device_fp"])
+        return str(device_fp)
 
     def _build_checkin_headers(
         self,

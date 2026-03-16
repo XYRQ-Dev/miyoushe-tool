@@ -144,6 +144,39 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         service._sleep_between_info_and_sign.assert_awaited_once()
         service._sleep_between_roles.assert_awaited_once()
 
+    async def test_refresh_device_fp_accepts_real_world_payload_shape(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+            client = FakeClient(
+                post_payload={
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {
+                        "device_fp": "713617441b",
+                        "code": 403,
+                        "msg": "传入的参数有误",
+                    },
+                }
+            )
+
+            device_fp = await service._refresh_device_fp(client, "device-id")
+
+        self.assertEqual(device_fp, "713617441b")
+
+    async def test_ensure_device_state_falls_back_when_device_fp_api_fails(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+
+            class BrokenClient:
+                async def post(self, *args, **kwargs):
+                    raise RuntimeError("network down")
+
+            device_id, device_fp = await service._ensure_device_state(BrokenClient())
+
+            self.assertTrue(device_id)
+            self.assertTrue(device_fp)
+            self.assertEqual(len(device_fp), 10)
+
     async def test_admin_email_settings_encrypt_password_and_hide_plaintext(self):
         async with await self._new_session() as session:
             admin = User(username="admin", password_hash="x", role="admin", is_active=True)
