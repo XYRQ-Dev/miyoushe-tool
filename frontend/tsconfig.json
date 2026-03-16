@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "useDefineForExpose": true,
+    // 该项目仅使用 Vue SFC 宏，不需要启用不存在的 TS 编译选项；
+    // 继续保留旧字段会导致 vue-tsc 直接失败，进而让真实业务错误被构建配置噪音淹没。
     "module": "ESNext",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
@@ -20,6 +21,5 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "env.d.ts"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "env.d.ts"]
 }

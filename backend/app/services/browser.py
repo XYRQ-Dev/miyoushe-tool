@@ -46,12 +46,9 @@ class BrowserManager:
         """创建独立的浏览器上下文（隔离 Cookie 等状态）"""
         browser = await self.get_browser()
         context = await browser.new_context(
-            viewport={"width": 400, "height": 700},
-            user_agent=(
-                "Mozilla/5.0 (Linux; Android 12; SM-G9880) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/107.0.0.0 Mobile Safari/537.36"
-            ),
+            # 米游社新版登录页在桌面视图中会通过 iframe 提供完整登录平台，
+            # 包含二维码入口；继续伪装成移动端会落入短信登录页，根本拿不到扫码路径。
+            viewport={"width": 1440, "height": 900},
         )
         return context
 

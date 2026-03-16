@@ -66,6 +66,19 @@ const errorMessage = ref('')
 const rolesCount = ref(0)
 let ws: WebSocket | null = null
 
+function getDisplayErrorMessage(message: string) {
+  if (message.includes('未进入扫码登录界面')) {
+    return '未切换到扫码登录，请重试'
+  }
+  if (message.includes('未找到二维码')) {
+    return '未找到二维码，请重试'
+  }
+  if (message.includes('未找到扫码登录入口') || message.includes('登录页结构')) {
+    return '登录页结构已变化，需要更新适配'
+  }
+  return message || '登录失败'
+}
+
 function startLogin() {
   if (!props.sessionId) return
 
@@ -100,11 +113,11 @@ function startLogin() {
         break
       case 'error':
         status.value = 'failed'
-        errorMessage.value = data.message
+        errorMessage.value = getDisplayErrorMessage(data.message || '')
         break
       case 'timeout':
         status.value = 'timeout'
-        errorMessage.value = data.message
+        errorMessage.value = getDisplayErrorMessage(data.message || '')
         break
     }
   }
