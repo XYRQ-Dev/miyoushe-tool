@@ -1,7 +1,13 @@
 """
 邮件通知服务
-签到完成后将结果汇总以 HTML 邮件发送给用户
-使用 aiosmtplib 异步发送，不阻塞签到主流程
+签到完成后将结果汇总以 HTML 邮件发送给用户。
+
+发信配置分为两层：
+1. 系统 SMTP：决定“系统是否有能力发信”，仅管理员可维护
+2. 用户接收邮箱：决定“发给谁、什么时候发”，由用户自行维护
+
+这两层语义不能混用。若未来有人把用户邮箱误当成系统 SMTP 配置来源，
+就会出现“用户明明填了邮箱但系统仍无法发送”的排障陷阱。
 """
 
 import logging
@@ -17,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.user import User
+from app.services.system_settings import SystemSettingsService
+from app.utils.crypto import decrypt_text
 from app.schemas.task_log import CheckinSummary
 
 logger = logging.getLogger(__name__)
@@ -94,6 +102,39 @@ EMAIL_TEMPLATE = Template("""
 class NotificationService:
     """邮件通知服务"""
 
+    async def _load_smtp_config(self, db: AsyncSession) -> dict | None:
+        """
+        读取系统 SMTP 配置。
+
+        优先使用后台保存的系统配置，后台未配置时才回退环境变量，
+        这样既兼容老部署，又允许管理员在 UI 中接管配置。
+        """
+        config = await SystemSettingsService(db).get_or_create()
+
+        if config.smtp_enabled and config.smtp_host and config.smtp_user:
+            return {
+                "hostname": config.smtp_host,
+                "port": config.smtp_port,
+                "username": config.smtp_user,
+                "password": decrypt_text(config.smtp_password_encrypted) if config.smtp_password_encrypted else "",
+                "use_ssl": config.smtp_use_ssl,
+                "sender_name": config.smtp_sender_name or "",
+                "sender_email": config.smtp_sender_email or config.smtp_user,
+            }
+
+        if settings.SMTP_HOST and settings.SMTP_USER:
+            return {
+                "hostname": settings.SMTP_HOST,
+                "port": settings.SMTP_PORT,
+                "username": settings.SMTP_USER,
+                "password": settings.SMTP_PASSWORD,
+                "use_ssl": settings.SMTP_USE_SSL,
+                "sender_name": "",
+                "sender_email": settings.SMTP_USER,
+            }
+
+        return None
+
     async def send_checkin_report(
         self,
         user_id: int,
@@ -106,8 +147,8 @@ class NotificationService:
         - email_notify=False → 不发送
         - notify_on='failure_only' 且全部成功 → 不发送
         """
-        # 检查 SMTP 是否配置
-        if not settings.SMTP_HOST or not settings.SMTP_USER:
+        smtp_config = await self._load_smtp_config(db)
+        if not smtp_config:
             logger.debug("SMTP 未配置，跳过邮件发送")
             return
 
@@ -124,13 +165,13 @@ class NotificationService:
             return
 
         try:
-            await self._send_email(user.email, summary)
+            await self._send_email(user.email, summary, smtp_config)
             logger.info(f"签到报告邮件已发送至 {user.email}")
         except Exception as e:
             # 邮件发送失败不影响签到结果
             logger.error(f"发送邮件失败: {e}")
 
-    async def _send_email(self, to_email: str, summary: CheckinSummary):
+    async def _send_email(self, to_email: str, summary: CheckinSummary, smtp_config: dict):
         """通过 SMTP 发送 HTML 邮件"""
         today = date.today().isoformat()
         subject = f"[米游社签到] {today} 签到报告"
@@ -142,20 +183,22 @@ class NotificationService:
         )
 
         msg = MIMEMultipart("alternative")
-        msg["From"] = settings.SMTP_USER
+        sender_name = smtp_config.get("sender_name", "").strip()
+        sender_email = smtp_config["sender_email"]
+        msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(html_content, "html", "utf-8"))
 
         # 使用 aiosmtplib 异步发送
         kwargs = {
-            "hostname": settings.SMTP_HOST,
-            "port": settings.SMTP_PORT,
-            "username": settings.SMTP_USER,
-            "password": settings.SMTP_PASSWORD,
+            "hostname": smtp_config["hostname"],
+            "port": smtp_config["port"],
+            "username": smtp_config["username"],
+            "password": smtp_config["password"],
         }
 
-        if settings.SMTP_USE_SSL:
+        if smtp_config["use_ssl"]:
             kwargs["use_tls"] = True
         else:
             kwargs["start_tls"] = True

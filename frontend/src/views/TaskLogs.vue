@@ -32,26 +32,35 @@
 
     <!-- 日志表格 -->
     <el-card class="table-card" shadow="never">
-      <el-table :data="logs" v-loading="loading" stripe style="width: 100%">
-        <el-table-column label="时间" prop="executed_at" width="180">
+      <el-table :data="logs" v-loading="loading" stripe style="width: 100%" table-layout="auto">
+        <el-table-column label="时间" prop="executed_at" :min-width="compactMode ? 150 : 180">
           <template #default="{ row }">
             {{ formatTime(row.executed_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="账号" prop="account_nickname" width="120" />
-        <el-table-column label="游戏" width="100">
+        <el-table-column label="账号" prop="account_nickname" :min-width="compactMode ? 110 : 140" show-overflow-tooltip />
+        <el-table-column label="游戏" :min-width="compactMode ? 100 : 120">
           <template #default="{ row }">
             {{ gameNames[row.game_biz] || row.game_biz || '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="角色" prop="game_nickname" width="120" />
-        <el-table-column label="状态" width="100">
+        <el-table-column v-if="!compactMode" label="角色" prop="game_nickname" min-width="140" show-overflow-tooltip />
+        <el-table-column label="状态" :width="compactMode ? 88 : 100">
           <template #default="{ row }">
             <StatusBadge :status="row.status" />
           </template>
         </el-table-column>
-        <el-table-column label="详情" prop="message" min-width="200" show-overflow-tooltip />
-        <el-table-column label="签到天数" prop="total_sign_days" width="100">
+        <el-table-column label="详情" :min-width="compactMode ? 240 : 320">
+          <template #default="{ row }">
+            <div class="log-message">
+              <div v-if="compactMode && row.game_nickname" class="message-meta">
+                角色：{{ row.game_nickname }}
+              </div>
+              <div class="message-text">{{ row.message || '-' }}</div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!compactMode" label="签到天数" prop="total_sign_days" width="100">
           <template #default="{ row }">
             {{ row.total_sign_days || '-' }}
           </template>
@@ -75,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { logApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -94,6 +103,8 @@ const pagination = reactive({
   total: 0,
 })
 
+const compactMode = ref(false)
+
 const gameNames: Record<string, string> = {
   hk4e_cn: '原神',
   hk4e_bilibili: '原神(B服)',
@@ -105,6 +116,10 @@ const gameNames: Record<string, string> = {
 
 function formatTime(dt: string) {
   return new Date(dt).toLocaleString('zh-CN')
+}
+
+function updateLayoutMode() {
+  compactMode.value = window.innerWidth < 1100
 }
 
 async function loadLogs() {
@@ -136,6 +151,14 @@ function resetFilters() {
 }
 
 onMounted(loadLogs)
+onMounted(() => {
+  updateLayoutMode()
+  window.addEventListener('resize', updateLayoutMode)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateLayoutMode)
+})
 </script>
 
 <style scoped>
@@ -163,5 +186,42 @@ onMounted(loadLogs)
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+}
+
+.log-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.5;
+}
+
+.message-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.message-text {
+  white-space: normal;
+  word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .logs-page {
+    max-width: none;
+  }
+
+  .filter-card :deep(.el-form) {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .filter-card :deep(.el-form-item) {
+    margin-right: 12px;
+    margin-bottom: 12px;
+  }
+
+  .pagination {
+    justify-content: center;
+  }
 }
 </style>

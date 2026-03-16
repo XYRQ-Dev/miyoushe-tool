@@ -21,9 +21,9 @@ def _get_key() -> bytes:
     return hashlib.sha256(raw).digest()
 
 
-def encrypt_cookie(plaintext: str) -> str:
+def encrypt_text(plaintext: str) -> str:
     """
-    加密 Cookie 字符串
+    加密任意敏感字符串
     返回格式：base64(nonce + ciphertext)
     nonce 固定 12 字节，拼接在密文前方便解密时拆分
     """
@@ -34,9 +34,9 @@ def encrypt_cookie(plaintext: str) -> str:
     return base64.b64encode(nonce + ciphertext).decode("utf-8")
 
 
-def decrypt_cookie(encrypted: str) -> str:
+def decrypt_text(encrypted: str) -> str:
     """
-    解密 Cookie 字符串
+    解密通用敏感字符串
     拆分 nonce（前 12 字节）和密文
     """
     key = _get_key()
@@ -45,3 +45,13 @@ def decrypt_cookie(encrypted: str) -> str:
     nonce = raw[:12]
     ciphertext = raw[12:]
     return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
+
+
+def encrypt_cookie(plaintext: str) -> str:
+    """兼容旧调用入口，Cookie 仍复用统一的 AES-GCM 机制。"""
+    return encrypt_text(plaintext)
+
+
+def decrypt_cookie(encrypted: str) -> str:
+    """兼容旧调用入口，避免现有业务层大范围改名。"""
+    return decrypt_text(encrypted)

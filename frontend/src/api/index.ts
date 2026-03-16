@@ -79,6 +79,17 @@ export const adminApi = {
   listUsers: () => api.get('/admin/users'),
   toggleUser: (id: number) => api.put(`/admin/users/${id}/toggle-active`),
   getStats: () => api.get('/admin/stats'),
+  getEmailSettings: () => api.get('/admin/system-settings/email'),
+  updateEmailSettings: (data: {
+    smtp_enabled: boolean
+    smtp_host: string
+    smtp_port: number
+    smtp_user: string
+    smtp_password?: string
+    smtp_use_ssl: boolean
+    smtp_sender_name: string
+    smtp_sender_email: string
+  }) => api.put('/admin/system-settings/email', data),
 }
 
 export default api

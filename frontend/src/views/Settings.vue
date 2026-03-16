@@ -100,6 +100,62 @@
     <el-card v-if="userStore.isAdmin" class="settings-card" shadow="never">
       <template #header>
         <div class="card-title">
+          <el-icon><Message /></el-icon>
+          <span>系统邮件配置（管理员）</span>
+        </div>
+      </template>
+
+      <el-alert
+        type="info"
+        :closable="false"
+        class="admin-alert"
+        title="这里配置的是系统发信 SMTP；用户个人设置里的通知邮箱只决定邮件发给谁。"
+      />
+
+      <el-form label-width="140px" :model="emailSettingsForm">
+        <el-form-item label="启用系统邮件">
+          <el-switch v-model="emailSettingsForm.smtp_enabled" />
+        </el-form-item>
+        <el-form-item label="SMTP 主机">
+          <el-input v-model="emailSettingsForm.smtp_host" placeholder="smtp.example.com" />
+        </el-form-item>
+        <el-form-item label="端口">
+          <el-input-number v-model="emailSettingsForm.smtp_port" :min="1" :max="65535" />
+        </el-form-item>
+        <el-form-item label="用户名">
+          <el-input v-model="emailSettingsForm.smtp_user" placeholder="mailer@example.com" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="emailSettingsForm.smtp_password"
+            type="password"
+            show-password
+            placeholder="留空表示不修改现有密码"
+          />
+          <span v-if="emailSettingsForm.smtp_password_configured" class="form-hint">
+            当前已保存密码，留空即可保持不变
+          </span>
+        </el-form-item>
+        <el-form-item label="发件人名称">
+          <el-input v-model="emailSettingsForm.smtp_sender_name" placeholder="米游社签到助手" />
+        </el-form-item>
+        <el-form-item label="发件人邮箱">
+          <el-input v-model="emailSettingsForm.smtp_sender_email" placeholder="mailer@example.com" />
+        </el-form-item>
+        <el-form-item label="SSL/TLS">
+          <el-switch v-model="emailSettingsForm.smtp_use_ssl" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="savingEmailSettings" @click="saveEmailSettings">
+            保存邮件配置
+          </el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card v-if="userStore.isAdmin" class="settings-card" shadow="never">
+      <template #header>
+        <div class="card-title">
           <el-icon><Setting /></el-icon>
           <span>用户管理（管理员）</span>
         </div>
@@ -145,7 +201,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { User, Clock, Sunny, Setting } from '@element-plus/icons-vue'
+import { User, Clock, Sunny, Setting, Message } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '../stores/user'
 import { authApi, taskApi, adminApi } from '../api'
@@ -153,6 +209,7 @@ import { authApi, taskApi, adminApi } from '../api'
 const userStore = useUserStore()
 const saving = ref(false)
 const savingTask = ref(false)
+const savingEmailSettings = ref(false)
 const users = ref<any[]>([])
 
 const userForm = reactive({
@@ -164,6 +221,18 @@ const userForm = reactive({
 const taskForm = reactive({
   cron_expr: '0 6 * * *',
   is_enabled: true,
+})
+
+const emailSettingsForm = reactive({
+  smtp_enabled: false,
+  smtp_host: '',
+  smtp_port: 465,
+  smtp_user: '',
+  smtp_password: '',
+  smtp_use_ssl: true,
+  smtp_sender_name: '',
+  smtp_sender_email: '',
+  smtp_password_configured: false,
 })
 
 async function loadSettings() {
@@ -186,8 +255,12 @@ async function loadSettings() {
   // 管理员加载用户列表
   if (userStore.isAdmin) {
     try {
-      const { data } = await adminApi.listUsers()
-      users.value = data
+      const [{ data: userList }, { data: emailSettings }] = await Promise.all([
+        adminApi.listUsers(),
+        adminApi.getEmailSettings(),
+      ])
+      users.value = userList
+      Object.assign(emailSettingsForm, emailSettings, { smtp_password: '' })
     } catch (e) {
       // 忽略
     }
@@ -215,6 +288,27 @@ async function saveTaskConfig() {
   }
 }
 
+async function saveEmailSettings() {
+  savingEmailSettings.value = true
+  try {
+    const payload = {
+      smtp_enabled: emailSettingsForm.smtp_enabled,
+      smtp_host: emailSettingsForm.smtp_host,
+      smtp_port: emailSettingsForm.smtp_port,
+      smtp_user: emailSettingsForm.smtp_user,
+      smtp_password: emailSettingsForm.smtp_password || undefined,
+      smtp_use_ssl: emailSettingsForm.smtp_use_ssl,
+      smtp_sender_name: emailSettingsForm.smtp_sender_name,
+      smtp_sender_email: emailSettingsForm.smtp_sender_email,
+    }
+    const { data } = await adminApi.updateEmailSettings(payload)
+    Object.assign(emailSettingsForm, data, { smtp_password: '' })
+    ElMessage.success('系统邮件配置已保存')
+  } finally {
+    savingEmailSettings.value = false
+  }
+}
+
 async function toggleUser(user: any) {
   try {
     await adminApi.toggleUser(user.id)
@@ -231,7 +325,7 @@ onMounted(loadSettings)
 
 <style scoped>
 .settings-page {
-  max-width: 800px;
+  max-width: 880px;
   margin: 0 auto;
 }
 
@@ -252,5 +346,23 @@ onMounted(loadSettings)
   margin-left: 12px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.admin-alert {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 768px) {
+  .settings-page {
+    max-width: none;
+  }
+
+  .settings-card :deep(.el-form) {
+    --el-form-label-width: 100px;
+  }
+
+  .settings-card :deep(.el-space) {
+    flex-wrap: wrap;
+  }
 }
 </style>

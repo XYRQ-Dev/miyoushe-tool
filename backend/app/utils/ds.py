@@ -1,7 +1,12 @@
 """
 DS 动态签名生成
-米游社 API 需要在请求头中携带 DS 签名防止接口滥用
-签名算法：MD5(salt={salt}&t={timestamp}&r={random}&b={body}&q={query})
+
+当前保留两种签名：
+1. generate_ds：旧版通用实现，供现有非签到链路继续使用
+2. generate_cn_dynamic_secret：对齐 Starward 的 Hyperion / 米游社国服签到实现
+
+两者虽然都叫 DS，但随机串规则和盐值并不完全相同。签到链路若误用旧实现，
+最容易出现的现象就是“参数看起来齐全，但星穹铁道查询状态始终失败”。
 """
 
 import hashlib
@@ -26,6 +31,29 @@ def generate_ds(body: str = "", query: str = "") -> str:
     t = int(time.time())
     r = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
     text = f"salt={salt}&t={t}&r={r}&b={body}&q={query}"
+    md5 = hashlib.md5(text.encode("utf-8")).hexdigest()
+    return f"{t},{r},{md5}"
+
+
+def generate_cn_dynamic_secret(salt: str) -> str:
+    """
+    生成与 Starward `CreateSecret()` 等价的国服签到 DS。
+
+    这里不能复用旧的 `generate_ds`，因为 Starward 使用的是：
+    - 6 位小写字母/数字随机串
+    - 仅参与 `salt/t/r`
+    - 不拼接 body/query
+
+    对签到接口来说，这个差异会直接影响服务端校验结果。
+    """
+    t = int(time.time())
+    seeded = random.Random(t)
+    chars = []
+    for _ in range(6):
+        value = seeded.randint(0, 32767) % 26
+        chars.append(chr(value + (48 if value < 10 else 87)))
+    r = "".join(chars)
+    text = f"salt={salt}&t={t}&r={r}"
     md5 = hashlib.md5(text.encode("utf-8")).hexdigest()
     return f"{t},{r},{md5}"
 
