@@ -219,6 +219,29 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[2]["hostname"], "smtp.example.com")
         self.assertEqual(args[2]["sender_email"], "mailer@example.com")
 
+    async def test_system_settings_service_auto_creates_table_for_legacy_database(self):
+        legacy_engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        async with legacy_engine.begin() as conn:
+            # 只创建旧版本已有的表，刻意不创建 system_settings，用来模拟线上旧库升级场景。
+            await conn.run_sync(User.__table__.create)
+            await conn.run_sync(MihoyoAccount.__table__.create)
+            await conn.run_sync(GameRole.__table__.create)
+
+        LegacySession = async_sessionmaker(legacy_engine, class_=AsyncSession, expire_on_commit=False)
+        async with LegacySession() as session:
+            service = CheckinService(session)
+            config = await service.settings_service.get_or_create()
+            self.assertFalse(config.smtp_enabled)
+
+            stored = (await session.execute(select(SystemSetting))).scalar_one()
+            self.assertEqual(stored.id, config.id)
+
+        await legacy_engine.dispose()
+
 
 if __name__ == "__main__":
     unittest.main()
