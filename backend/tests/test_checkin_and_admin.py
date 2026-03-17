@@ -18,7 +18,7 @@ from app.models.task_log import TaskLog
 from app.models.user import User
 from app.schemas.system_setting import AdminEmailSettingsUpdate
 from app.schemas.task_log import CheckinSummary, CheckinResult
-from app.services.checkin import CheckinApiError, CheckinGameConfig, CheckinService
+from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
 from app.services.notifier import NotificationService
 from app.utils.timezone import utc_now, utc_now_naive
 from app.utils.crypto import decrypt_text
@@ -82,6 +82,25 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["x-rpc-app_version"], HYPERION_APP_VERSION)
         self.assertIn("miHoYoBBS", headers["User-Agent"])
         self.assertTrue(headers["DS"])
+
+    async def test_build_checkin_headers_supports_bh3_signgame(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+            headers = service._build_checkin_headers(
+                "ltuid=1;",
+                device_id="device-id",
+                device_fp="device-fp",
+                sign_game="bh3",
+            )
+
+        self.assertEqual(headers["x-rpc-signgame"], "bh3")
+
+    async def test_bh3_cn_uses_expected_checkin_game_config(self):
+        config = CHECKIN_GAME_CONFIGS.get("bh3_cn")
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.act_id, "e202207181446311")
+        self.assertEqual(config.sign_game, "bh3")
 
     async def test_utc_now_helpers_return_utc_with_and_without_tzinfo(self):
         aware_now = utc_now()
@@ -159,13 +178,42 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         service._sleep_between_info_and_sign.assert_awaited_once()
         service._sleep_between_roles.assert_awaited_once()
 
-    async def test_execute_for_user_skips_unsupported_games_without_logging_failure(self):
+    async def test_execute_for_user_runs_bh3_cn_checkin(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="bh3_cn", game_uid="30001", region="android01", is_enabled=True)
+            session.add(role)
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 8})
+            service._do_sign = AsyncMock(
+                return_value=CheckinResult(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=8,
+                )
+            )
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.total, 1)
+        self.assertEqual(summary.success, 1)
+        service._get_sign_info.assert_awaited_once()
+        service._do_sign.assert_awaited_once()
+
+    async def test_execute_for_user_still_skips_unsupported_games_without_logging_failure(self):
         async with await self._new_session() as session:
             account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             session.add(GameRole(account_id=account.id, game_biz="nap_cn", game_uid="20001", region="prod_gf_jp", is_enabled=True))
-            session.add(GameRole(account_id=account.id, game_biz="bh3_cn", game_uid="30001", region="android01", is_enabled=True))
             await session.commit()
 
             service = CheckinService(session)
@@ -180,6 +228,23 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.failed, 0)
         service._get_sign_info.assert_not_awaited()
         service._do_sign.assert_not_awaited()
+
+    async def test_get_sign_info_uses_bh3_checkin_act_id(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+            role = GameRole(id=3, account_id=1, game_biz="bh3_cn", game_uid="30001", region="android01")
+            client = FakeClient(get_payload={"retcode": 0, "data": {"is_sign": False, "total_sign_day": 3}})
+
+            await service._get_sign_info(
+                client,
+                "ltuid=1;",
+                CheckinGameConfig(act_id="e202207181446311", sign_game="bh3"),
+                role,
+                ("device-id", "device-fp"),
+            )
+
+        self.assertEqual(client.last_get["params"]["act_id"], "e202207181446311")
+        self.assertEqual(client.last_get["headers"]["x-rpc-signgame"], "bh3")
 
     async def test_refresh_device_fp_accepts_real_world_payload_shape(self):
         async with await self._new_session() as session:

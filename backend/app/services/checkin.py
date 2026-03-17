@@ -9,7 +9,7 @@
 
 这些机制必须成套存在，不能只改其中某一项。
 如果后续维护时“看起来某个字段没用”而被删掉，最常见的后果就是：
-- 原神还能工作，星穹铁道查询状态稳定失败
+- 原神还能工作，星穹铁道 / 崩坏3 查询状态稳定失败
 - 接口偶发返回风控或参数校验错误，但日志只能看到泛化失败
 """
 
@@ -59,15 +59,19 @@ CHECKIN_GAME_CONFIGS: dict[str, CheckinGameConfig] = {
     "hk4e_bilibili": CheckinGameConfig(act_id="e202311201442471", sign_game="hk4e"),
     "hkrpg_cn": CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
     "hkrpg_bilibili": CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
+    # 崩坏3国服官服当前沿用 event/luna 链路，act_id 已通过官方 home 接口确认仍在线。
+    # 这里把 sign_game 固定为 bh3，是因为官方活动元数据返回 biz=bh3；
+    # 若后续米哈游调整该字段，必须连同测试和真实接口校验一起更新，不能只改前端文案。
+    "bh3_cn": CheckinGameConfig(act_id="e202207181446311", sign_game="bh3"),
 }
 SUPPORTED_CHECKIN_BIZ = tuple(CHECKIN_GAME_CONFIGS.keys())
 
 
 def is_checkin_supported_game(game_biz: str) -> bool:
     """
-    当前仅原神与星穹铁道的国服签到链路已完成适配。
+    当前仅原神、星穹铁道、崩坏3的国服官服签到链路已完成适配。
 
-    绝区零、崩坏3 等角色即便已通过账号导入拿到，也不能误导性地继续走签到流程，
+    绝区零等角色即便已通过账号导入拿到，也不能误导性地继续走签到流程，
     否则最坏情况不是“签到失败”，而是向未验证接口发请求并制造脏日志。
     """
     return game_biz in CHECKIN_GAME_CONFIGS
