@@ -4,7 +4,7 @@
 - 支持按日期范围、账号、状态筛选
 """
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func, and_
@@ -16,6 +16,11 @@ from app.models.account import MihoyoAccount, GameRole
 from app.models.task_log import TaskLog
 from app.schemas.task_log import TaskLogResponse, TaskLogListResponse
 from app.api.auth import get_current_user
+from app.utils.timezone import (
+    convert_utc_naive_to_app_timezone,
+    get_app_day_utc_range,
+    get_current_app_date,
+)
 
 router = APIRouter(prefix="/api/logs", tags=["签到日志"])
 
@@ -58,14 +63,18 @@ async def list_logs(
 
     if date_start:
         try:
-            start_dt = datetime.strptime(date_start, "%Y-%m-%d")
+            start_dt, _ = get_app_day_utc_range(
+                datetime.strptime(date_start, "%Y-%m-%d").date()
+            )
             conditions.append(TaskLog.executed_at >= start_dt)
         except ValueError:
             pass
 
     if date_end:
         try:
-            end_dt = datetime.strptime(date_end, "%Y-%m-%d") + timedelta(days=1)
+            _, end_dt = get_app_day_utc_range(
+                datetime.strptime(date_end, "%Y-%m-%d").date()
+            )
             conditions.append(TaskLog.executed_at < end_dt)
         except ValueError:
             pass
@@ -117,7 +126,7 @@ async def list_logs(
                 status=log.status,
                 message=log.message,
                 total_sign_days=log.total_sign_days,
-                executed_at=log.executed_at,
+                executed_at=convert_utc_naive_to_app_timezone(log.executed_at),
                 account_nickname=acc_nickname,
                 game_nickname=game_nickname,
                 game_biz=game_biz,
@@ -147,9 +156,8 @@ async def get_sign_calendar(
 
     calendar = []
     for i in range(days):
-        day = date.today() - timedelta(days=i)
-        day_start = datetime.combine(day, datetime.min.time())
-        day_end = day_start + timedelta(days=1)
+        day = get_current_app_date() - timedelta(days=i)
+        day_start, day_end = get_app_day_utc_range(day)
 
         result = await db.execute(
             select(TaskLog).where(

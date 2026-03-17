@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # 应用基础配置
     APP_NAME: str = "米游社自动签到"
     DEBUG: bool = False
+    APP_TIMEZONE: str = "Asia/Shanghai"
 
     # JWT 配置
     SECRET_KEY: str = secrets.token_urlsafe(32)

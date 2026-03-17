@@ -6,10 +6,9 @@
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, date
 
 from app.database import get_db
 from app.models.user import User
@@ -20,6 +19,8 @@ from app.schemas.task_log import (
 )
 from app.api.auth import get_current_user
 from app.services.checkin import CheckinService, SUPPORTED_CHECKIN_BIZ
+from app.services.notifier import notification_service
+from app.utils.timezone import get_app_day_utc_range, get_current_app_date
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tasks", tags=["任务管理"])
@@ -82,6 +83,12 @@ async def execute_checkin(
     """手动立即执行签到（对该用户的所有启用账号）"""
     checkin_service = CheckinService(db)
     summary = await checkin_service.execute_for_user(current_user.id)
+
+    # 手动签到与定时签到必须复用同一套通知语义，避免后续维护时一条链路发邮件、
+    # 另一条链路不发邮件，导致用户设置（通知邮箱、通知策略、SMTP）表现不一致。
+    # 这里必须复用 NotificationService，而不是在接口层重新拼装“手动专用”通知规则，
+    # 否则排障时会出现“定时任务会发、手动执行不发”之类的行为分叉。
+    await notification_service.send_checkin_report(current_user.id, summary, db)
     return summary
 
 
@@ -91,7 +98,7 @@ async def get_today_status(
     db: AsyncSession = Depends(get_db),
 ):
     """获取今日签到状态概览"""
-    today_start = datetime.combine(date.today(), datetime.min.time())
+    today_start, today_end = get_app_day_utc_range(get_current_app_date())
 
     # 查询该用户所有账号
     accounts_result = await db.execute(
@@ -113,6 +120,7 @@ async def get_today_status(
         select(TaskLog).where(
             TaskLog.account_id.in_(account_ids),
             TaskLog.executed_at >= today_start,
+            TaskLog.executed_at < today_end,
         )
     )
     logs = logs_result.scalars().all()

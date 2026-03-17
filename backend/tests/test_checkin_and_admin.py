@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import datetime, timedelta, timezone, date
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
@@ -7,9 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.api.admin import get_email_settings, update_email_settings
+from app.api.logs import get_sign_calendar, list_logs
+from app.api.tasks import execute_checkin, get_today_status
 from app.database import Base
 from app.models.account import GameRole, MihoyoAccount
 from app.models.system_setting import SystemSetting
+from app.models.task_log import TaskLog
 from app.models.user import User
 from app.schemas.system_setting import AdminEmailSettingsUpdate
 from app.schemas.task_log import CheckinSummary, CheckinResult
@@ -273,6 +277,232 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[0], "notify@example.com")
         self.assertEqual(args[2]["hostname"], "smtp.example.com")
         self.assertEqual(args[2]["sender_email"], "mailer@example.com")
+
+    async def test_notification_service_skips_when_user_notification_disabled(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="user-disabled",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=False,
+                notify_on="always",
+            )
+            session.add(user)
+            session.add(
+                SystemSetting(
+                    smtp_enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="mailer@example.com",
+                    smtp_password_encrypted=None,
+                    smtp_use_ssl=True,
+                    smtp_sender_name="签到助手",
+                    smtp_sender_email="mailer@example.com",
+                )
+            )
+            await session.commit()
+
+            service = NotificationService()
+            service._send_email = AsyncMock()
+
+            summary = CheckinSummary(
+                total=1,
+                success=0,
+                failed=1,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="failed", message="boom")],
+            )
+
+            await service.send_checkin_report(user.id, summary, session)
+
+        service._send_email.assert_not_awaited()
+
+    async def test_notification_service_skips_success_report_when_failure_only(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="user-failure-only",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="failure_only",
+            )
+            session.add(user)
+            session.add(
+                SystemSetting(
+                    smtp_enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="mailer@example.com",
+                    smtp_password_encrypted=None,
+                    smtp_use_ssl=True,
+                    smtp_sender_name="签到助手",
+                    smtp_sender_email="mailer@example.com",
+                )
+            )
+            await session.commit()
+
+            service = NotificationService()
+            service._send_email = AsyncMock()
+
+            summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+
+            await service.send_checkin_report(user.id, summary, session)
+
+        service._send_email.assert_not_awaited()
+
+    async def test_manual_execute_checkin_triggers_notification_service(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="manual-user",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="always",
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+            expected_summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+
+            with patch("app.api.tasks.CheckinService") as mock_checkin_cls, patch(
+                "app.services.notifier.notification_service.send_checkin_report",
+                new_callable=AsyncMock,
+            ) as mock_send_report:
+                mock_checkin = mock_checkin_cls.return_value
+                mock_checkin.execute_for_user = AsyncMock(return_value=expected_summary)
+
+                summary = await execute_checkin(current_user=user, db=session)
+
+        self.assertEqual(summary, expected_summary)
+        mock_checkin.execute_for_user.assert_awaited_once_with(user.id)
+        mock_send_report.assert_awaited_once_with(user.id, expected_summary, session)
+
+    async def test_list_logs_filters_and_serializes_executed_at_by_east_eight_boundary(self):
+        async with await self._new_session() as session:
+            user = User(username="log-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(user_id=user.id, nickname="测试账号", cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    task_type="checkin",
+                    status="success",
+                    message="ok",
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            response = await list_logs(
+                page=1,
+                page_size=20,
+                account_id=None,
+                status=None,
+                date_start="2026-03-17",
+                date_end="2026-03-17",
+                current_user=user,
+                db=session,
+            )
+
+        self.assertEqual(response.total, 1)
+        self.assertEqual(len(response.logs), 1)
+        self.assertEqual(response.logs[0].executed_at.utcoffset(), timedelta(hours=8))
+        self.assertEqual(response.logs[0].executed_at.hour, 0)
+        self.assertEqual(response.logs[0].executed_at.minute, 30)
+
+    async def test_get_today_status_uses_east_eight_day_boundary(self):
+        async with await self._new_session() as session:
+            user = User(username="status-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(user_id=user.id, nickname="测试账号", cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+
+            role = GameRole(
+                account_id=account.id,
+                game_biz="hk4e_cn",
+                game_uid="10001",
+                region="cn_gf01",
+                is_enabled=True,
+            )
+            session.add(role)
+            await session.flush()
+
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="success",
+                    message="ok",
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            with patch("app.api.tasks.get_current_app_date", return_value=date(2026, 3, 17)):
+                response = await get_today_status(current_user=user, db=session)
+
+        self.assertEqual(response["signed_today"], 1)
+        self.assertEqual(response["pending"], 0)
+
+    async def test_get_sign_calendar_groups_logs_by_east_eight_date(self):
+        async with await self._new_session() as session:
+            user = User(username="calendar-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(user_id=user.id, nickname="测试账号", cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    task_type="checkin",
+                    status="success",
+                    message="ok",
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            with patch("app.api.logs.get_current_app_date", return_value=date(2026, 3, 17)):
+                response = await get_sign_calendar(days=1, current_user=user, db=session)
+
+        self.assertEqual(len(response["calendar"]), 1)
+        self.assertEqual(response["calendar"][0]["date"], "2026-03-17")
+        self.assertEqual(response["calendar"][0]["success"], 1)
+        self.assertEqual(response["calendar"][0]["total"], 1)
 
     async def test_system_settings_service_auto_creates_table_for_legacy_database(self):
         legacy_engine = create_async_engine(
