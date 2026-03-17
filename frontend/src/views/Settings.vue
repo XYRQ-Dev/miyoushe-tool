@@ -72,6 +72,29 @@
             保存调度配置
           </el-button>
         </el-form-item>
+        <el-form-item v-if="taskForm.is_enabled && taskForm.scheduler_error">
+          <el-alert
+            type="error"
+            :closable="false"
+            :title="`调度任务注册失败：${taskForm.scheduler_error}`"
+          />
+        </el-form-item>
+        <el-form-item v-else-if="taskForm.is_enabled && !taskForm.job_registered">
+          <el-alert
+            type="warning"
+            :closable="false"
+            title="自动签到已启用，但当前后端没有注册成功的调度任务。请重新保存配置，若仍失败请检查后端日志。"
+          />
+        </el-form-item>
+        <el-form-item v-else-if="taskForm.is_enabled">
+          <div class="schedule-status">
+            <div>调度任务已注册：{{ taskForm.job_id || '-' }}</div>
+            <div>下次执行时间：{{ formatScheduleTime(taskForm.next_run_time) }}</div>
+            <div class="form-hint">
+              到达 Cron 时间后，系统可能会在 1 分钟内随机执行，以分散请求，因此实际签到日志可能略晚出现。
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
     </el-card>
 
@@ -177,6 +200,10 @@ const userForm = reactive({
 const taskForm = reactive({
   cron_expr: '0 6 * * *',
   is_enabled: true,
+  job_registered: false,
+  job_id: '',
+  next_run_time: '',
+  scheduler_error: '',
 })
 
 const emailSettingsForm = reactive({
@@ -202,8 +229,7 @@ async function loadSettings() {
   // 加载签到配置
   try {
     const { data } = await taskApi.getConfig()
-    taskForm.cron_expr = data.cron_expr
-    taskForm.is_enabled = data.is_enabled
+    syncTaskForm(data)
   } catch (e) {
     // 忽略
   }
@@ -233,11 +259,38 @@ async function saveUserSettings() {
 async function saveTaskConfig() {
   savingTask.value = true
   try {
-    await taskApi.updateConfig(taskForm)
+    const { data } = await taskApi.updateConfig({
+      cron_expr: taskForm.cron_expr,
+      is_enabled: taskForm.is_enabled,
+    })
+    syncTaskForm(data)
     ElMessage.success('调度配置已保存')
   } finally {
     savingTask.value = false
   }
+}
+
+function syncTaskForm(data: {
+  cron_expr: string
+  is_enabled: boolean
+  job_registered?: boolean
+  job_id?: string | null
+  next_run_time?: string | null
+  scheduler_error?: string | null
+}) {
+  taskForm.cron_expr = data.cron_expr
+  taskForm.is_enabled = data.is_enabled
+  taskForm.job_registered = Boolean(data.job_registered)
+  taskForm.job_id = data.job_id || ''
+  taskForm.next_run_time = data.next_run_time || ''
+  taskForm.scheduler_error = data.scheduler_error || ''
+}
+
+function formatScheduleTime(value?: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN')
 }
 
 async function saveEmailSettings() {
@@ -287,6 +340,13 @@ onMounted(loadSettings)
   margin-left: 12px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.schedule-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.6;
 }
 
 .admin-alert {

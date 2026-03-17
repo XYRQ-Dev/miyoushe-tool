@@ -17,6 +17,10 @@ class TaskConfigResponse(BaseModel):
     cron_expr: str
     is_enabled: bool
     created_at: datetime
+    job_registered: bool = False
+    job_id: Optional[str] = None
+    next_run_time: Optional[datetime] = None
+    scheduler_error: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

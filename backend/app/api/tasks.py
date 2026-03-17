@@ -6,7 +6,7 @@
 """
 
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,10 +20,30 @@ from app.schemas.task_log import (
 from app.api.auth import get_current_user
 from app.services.checkin import CheckinService, SUPPORTED_CHECKIN_BIZ
 from app.services.notifier import notification_service
+from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, scheduler_service
+from app.services.task_config import get_or_create_task_config
 from app.utils.timezone import get_app_day_utc_range, get_current_app_date
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tasks", tags=["任务管理"])
+
+
+def _build_task_config_response(
+    config: TaskConfig,
+    runtime: ScheduleRegistrationResult,
+) -> TaskConfigResponse:
+    return TaskConfigResponse(
+        id=config.id,
+        user_id=config.user_id,
+        task_type=config.task_type,
+        cron_expr=config.cron_expr,
+        is_enabled=config.is_enabled,
+        created_at=config.created_at,
+        job_registered=runtime.job_registered,
+        job_id=runtime.job_id,
+        next_run_time=runtime.next_run_time,
+        scheduler_error=runtime.scheduler_error,
+    )
 
 
 @router.get("/config", response_model=TaskConfigResponse)
@@ -32,19 +52,12 @@ async def get_task_config(
     db: AsyncSession = Depends(get_db),
 ):
     """获取当前用户的签到调度配置"""
-    result = await db.execute(
-        select(TaskConfig).where(TaskConfig.user_id == current_user.id)
+    config, _ = await get_or_create_task_config(db, current_user.id, auto_commit=True)
+    runtime = scheduler_service.get_user_schedule_status(
+        current_user.id,
+        enabled=config.is_enabled,
     )
-    config = result.scalar_one_or_none()
-
-    if not config:
-        # 首次访问时自动创建默认配置
-        config = TaskConfig(user_id=current_user.id)
-        db.add(config)
-        await db.commit()
-        await db.refresh(config)
-
-    return config
+    return _build_task_config_response(config, runtime)
 
 
 @router.put("/config", response_model=TaskConfigResponse)
@@ -54,25 +67,21 @@ async def update_task_config(
     db: AsyncSession = Depends(get_db),
 ):
     """更新签到调度配置"""
-    result = await db.execute(
-        select(TaskConfig).where(TaskConfig.user_id == current_user.id)
-    )
-    config = result.scalar_one_or_none()
-
-    if not config:
-        config = TaskConfig(user_id=current_user.id)
-        db.add(config)
+    config, _ = await get_or_create_task_config(db, current_user.id, auto_commit=False)
 
     config.cron_expr = data.cron_expr
     config.is_enabled = data.is_enabled
+    await db.flush()
+
+    try:
+        runtime = await scheduler_service.update_user_schedule(current_user.id, config)
+    except ScheduleRegistrationError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+
     await db.commit()
     await db.refresh(config)
-
-    # 通知调度器更新任务
-    from app.services.scheduler import scheduler_service
-    await scheduler_service.update_user_schedule(current_user.id, config)
-
-    return config
+    return _build_task_config_response(config, runtime)
 
 
 @router.post("/execute", response_model=CheckinSummary)

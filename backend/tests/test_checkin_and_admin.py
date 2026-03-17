@@ -4,24 +4,28 @@ from datetime import datetime, timedelta, timezone, date
 from email.header import decode_header
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.api.auth import register
 from app.api.admin import get_email_settings, update_email_settings
 from app.api.accounts import list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
-from app.api.tasks import execute_checkin, get_today_status
+from app.api.tasks import execute_checkin, get_today_status, update_task_config
 from app.database import Base, ensure_account_columns
 from app.models.account import GameRole, MihoyoAccount
 from app.models.system_setting import SystemSetting
-from app.models.task_log import TaskLog
+from app.models.task_log import TaskConfig, TaskLog
 from app.models.user import User
 from app.schemas.system_setting import AdminEmailSettingsUpdate
-from app.schemas.task_log import CheckinSummary, CheckinResult
+from app.schemas.task_log import CheckinSummary, CheckinResult, TaskConfigCreate
+from app.schemas.user import UserCreate
 from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
 from app.services.login_state import LoginStateService
 from app.services.notifier import NotificationService
+from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, SchedulerService
 from app.utils.timezone import utc_now, utc_now_naive
 from app.utils.crypto import decrypt_text, encrypt_text
 from app.utils.device import HYPERION_APP_VERSION
@@ -67,6 +71,174 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
 
     async def _new_session(self):
         return self.session_factory()
+
+    async def test_register_creates_default_task_config(self):
+        async with await self._new_session() as session:
+            user = await register(
+                UserCreate(username="new-user", password="password123"),
+                db=session,
+            )
+
+            config = (
+                await session.execute(select(TaskConfig).where(TaskConfig.user_id == user.id))
+            ).scalar_one()
+
+        self.assertEqual(config.cron_expr, "0 6 * * *")
+        self.assertTrue(config.is_enabled)
+
+    async def test_scheduler_load_all_schedules_creates_missing_default_config_and_registers_job(self):
+        async with await self._new_session() as session:
+            session.add(User(username="missing-config-user", password_hash="x", role="user", is_active=True))
+            await session.commit()
+
+        service = SchedulerService()
+        service.scheduler.start()
+        try:
+            with patch("app.services.scheduler.async_session", self.session_factory):
+                await service._load_all_schedules()
+
+            async with await self._new_session() as verify_session:
+                config = (await verify_session.execute(select(TaskConfig))).scalar_one()
+
+            self.assertEqual(config.cron_expr, "0 6 * * *")
+            self.assertTrue(config.is_enabled)
+            self.assertIsNotNone(service.scheduler.get_job("checkin_user_1"))
+        finally:
+            service.stop()
+
+    async def test_scheduler_update_user_schedule_registers_job_and_returns_next_run_time(self):
+        service = SchedulerService()
+        service.scheduler.start()
+        try:
+            config = TaskConfig(user_id=7, cron_expr="0 6 * * *", is_enabled=True)
+
+            result = await service.update_user_schedule(7, config)
+
+            self.assertTrue(result.job_registered)
+            self.assertEqual(result.job_id, "checkin_user_7")
+            self.assertIsNotNone(result.next_run_time)
+            self.assertIsNone(result.scheduler_error)
+            self.assertIsNotNone(service.scheduler.get_job("checkin_user_7"))
+        finally:
+            service.stop()
+
+    async def test_scheduler_update_user_schedule_rejects_invalid_cron_expression(self):
+        service = SchedulerService()
+        service.scheduler.start()
+        try:
+            config = TaskConfig(user_id=8, cron_expr="bad cron", is_enabled=True)
+
+            with self.assertRaises(ScheduleRegistrationError) as ctx:
+                await service.update_user_schedule(8, config)
+        finally:
+            service.stop()
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Cron 表达式无效", str(ctx.exception))
+
+    async def test_scheduler_update_user_schedule_disabling_removes_existing_job(self):
+        service = SchedulerService()
+        service.scheduler.start()
+        try:
+            config = TaskConfig(user_id=9, cron_expr="0 6 * * *", is_enabled=True)
+            await service.update_user_schedule(9, config)
+            config.is_enabled = False
+
+            result = await service.update_user_schedule(9, config)
+
+            self.assertFalse(result.job_registered)
+            self.assertFalse(result.enabled)
+            self.assertIsNone(result.next_run_time)
+            self.assertIsNone(service.scheduler.get_job("checkin_user_9"))
+        finally:
+            service.stop()
+
+    async def test_scheduler_execute_checkin_uses_delay_within_one_minute_and_still_notifies(self):
+        service = SchedulerService()
+        expected_summary = CheckinSummary(
+            total=1,
+            success=1,
+            failed=0,
+            already_signed=0,
+            risk=0,
+            results=[CheckinResult(account_id=1, status="success", message="ok")],
+        )
+
+        with patch("app.services.scheduler.async_session", self.session_factory), patch(
+            "app.services.scheduler.random.uniform",
+            return_value=12.5,
+        ) as mock_uniform, patch(
+            "asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as mock_sleep, patch(
+            "app.services.scheduler.CheckinService",
+        ) as mock_checkin_cls, patch(
+            "app.services.notifier.notification_service.send_checkin_report",
+            new_callable=AsyncMock,
+        ) as mock_send_report:
+            mock_checkin = mock_checkin_cls.return_value
+            mock_checkin.execute_for_user = AsyncMock(return_value=expected_summary)
+
+            await service._execute_checkin(42)
+
+        mock_uniform.assert_called_once_with(0, 60)
+        mock_sleep.assert_awaited_once_with(12.5)
+        mock_checkin.execute_for_user.assert_awaited_once_with(42)
+        mock_send_report.assert_awaited_once()
+        self.assertEqual(mock_send_report.await_args.args[0], 42)
+        self.assertEqual(mock_send_report.await_args.args[1], expected_summary)
+        self.assertEqual(mock_send_report.await_args.kwargs["source"], "scheduled_checkin")
+
+    async def test_update_task_config_returns_scheduler_runtime_fields(self):
+        async with await self._new_session() as session:
+            user = User(username="task-config-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+            expected_result = ScheduleRegistrationResult(
+                enabled=True,
+                job_registered=True,
+                job_id=f"checkin_user_{user.id}",
+                next_run_time=datetime(2026, 3, 18, 6, 0, tzinfo=timezone.utc),
+                scheduler_error=None,
+            )
+
+            with patch(
+                "app.api.tasks.scheduler_service.update_user_schedule",
+                new=AsyncMock(return_value=expected_result),
+            ):
+                response = await update_task_config(
+                    TaskConfigCreate(cron_expr="0 6 * * *", is_enabled=True),
+                    current_user=user,
+                    db=session,
+                )
+
+        self.assertTrue(response.job_registered)
+        self.assertEqual(response.job_id, f"checkin_user_{user.id}")
+        self.assertEqual(response.next_run_time, expected_result.next_run_time)
+        self.assertIsNone(response.scheduler_error)
+
+    async def test_update_task_config_raises_http_error_for_invalid_cron(self):
+        async with await self._new_session() as session:
+            user = User(username="invalid-cron-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+            with patch(
+                "app.api.tasks.scheduler_service.update_user_schedule",
+                new=AsyncMock(side_effect=ScheduleRegistrationError("Cron 表达式无效: bad cron", status_code=400)),
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    await update_task_config(
+                        TaskConfigCreate(cron_expr="bad cron", is_enabled=True),
+                        current_user=user,
+                        db=session,
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Cron 表达式无效", ctx.exception.detail)
 
     async def test_build_checkin_headers_include_starward_required_fields(self):
         async with await self._new_session() as session:
@@ -215,6 +387,304 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.success, 1)
         service._sleep_between_info_and_sign.assert_awaited_once()
         service._sleep_between_roles.assert_awaited_once()
+
+    async def test_execute_for_user_reuses_today_success_log_without_calling_upstream(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid", nickname="测试账号")
+            session.add(account)
+            await session.flush()
+            role = GameRole(
+                account_id=account.id,
+                game_biz="hkrpg_cn",
+                game_uid="10001",
+                region="prod_gf_cn",
+                is_enabled=True,
+                nickname="星铁角色",
+            )
+            session.add(role)
+            await session.flush()
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=12,
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock()
+            service._get_sign_info = AsyncMock()
+            service._do_sign = AsyncMock()
+
+            with patch("app.services.checkin.get_current_app_date", return_value=date(2026, 3, 17), create=True):
+                summary = await service.execute_for_user(1)
+
+            log_count = (
+                await session.execute(select(TaskLog).where(TaskLog.account_id == account.id))
+            ).scalars().all()
+
+        self.assertEqual(summary.total, 1)
+        self.assertEqual(summary.success, 0)
+        self.assertEqual(summary.already_signed, 1)
+        self.assertEqual(summary.results[0].status, "already_signed")
+        self.assertEqual(summary.results[0].message, "今日已签到（复用当日记录，未重复调用接口）")
+        self.assertEqual(summary.results[0].total_sign_days, 12)
+        self.assertEqual(len(log_count), 1)
+        service._ensure_device_state.assert_not_awaited()
+        service._get_sign_info.assert_not_awaited()
+        service._do_sign.assert_not_awaited()
+
+    async def test_execute_for_user_reuses_today_already_signed_log_without_calling_upstream(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", region="cn_gf01", is_enabled=True)
+            session.add(role)
+            await session.flush()
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="already_signed",
+                    message="今日已签到",
+                    total_sign_days=20,
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock()
+            service._get_sign_info = AsyncMock()
+            service._do_sign = AsyncMock()
+
+            with patch("app.services.checkin.get_current_app_date", return_value=date(2026, 3, 17), create=True):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.total, 1)
+        self.assertEqual(summary.already_signed, 1)
+        self.assertEqual(summary.results[0].status, "already_signed")
+        self.assertEqual(summary.results[0].total_sign_days, 20)
+        service._ensure_device_state.assert_not_awaited()
+        service._get_sign_info.assert_not_awaited()
+        service._do_sign.assert_not_awaited()
+
+    async def test_execute_for_user_does_not_short_circuit_today_failed_log(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
+            session.add(role)
+            await session.flush()
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="failed",
+                    message="网络错误",
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 13})
+            service._do_sign = AsyncMock(
+                return_value=CheckinResult(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=13,
+                )
+            )
+            service._sleep_between_info_and_sign = AsyncMock()
+            service._sleep_between_roles = AsyncMock()
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"), patch(
+                "app.services.checkin.get_current_app_date",
+                return_value=date(2026, 3, 17),
+                create=True,
+            ):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.success, 1)
+        self.assertEqual(summary.already_signed, 0)
+        service._ensure_device_state.assert_awaited_once()
+        service._get_sign_info.assert_awaited_once()
+        service._do_sign.assert_awaited_once()
+
+    async def test_execute_for_user_uses_latest_today_log_status_for_short_circuit(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
+            session.add(role)
+            await session.flush()
+            session.add_all([
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=10,
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                ),
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="failed",
+                    message="网络错误",
+                    executed_at=datetime(2026, 3, 16, 17, 30, 0),
+                ),
+            ])
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 11})
+            service._do_sign = AsyncMock(
+                return_value=CheckinResult(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=11,
+                )
+            )
+            service._sleep_between_info_and_sign = AsyncMock()
+            service._sleep_between_roles = AsyncMock()
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"), patch(
+                "app.services.checkin.get_current_app_date",
+                return_value=date(2026, 3, 17),
+                create=True,
+            ):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.success, 1)
+        self.assertEqual(summary.already_signed, 0)
+        service._get_sign_info.assert_awaited_once()
+        service._do_sign.assert_awaited_once()
+
+    async def test_execute_for_user_only_short_circuits_matching_role(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid", nickname="测试账号")
+            session.add(account)
+            await session.flush()
+            cached_role = GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", region="cn_gf01", is_enabled=True)
+            pending_role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10002", region="prod_gf_cn", is_enabled=True)
+            session.add_all([cached_role, pending_role])
+            await session.flush()
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=cached_role.id,
+                    task_type="checkin",
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=3,
+                    executed_at=datetime(2026, 3, 16, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._checkin_role = AsyncMock(
+                return_value=CheckinResult(
+                    account_id=account.id,
+                    game_role_id=pending_role.id,
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=9,
+                )
+            )
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"), patch(
+                "app.services.checkin.get_current_app_date",
+                return_value=date(2026, 3, 17),
+                create=True,
+            ):
+                summary = await service.execute_for_user(1)
+
+            logs = (
+                await session.execute(
+                    select(TaskLog).where(TaskLog.account_id == account.id).order_by(TaskLog.id.asc())
+                )
+            ).scalars().all()
+
+        self.assertEqual(summary.total, 2)
+        self.assertEqual(summary.success, 1)
+        self.assertEqual(summary.already_signed, 1)
+        self.assertEqual(summary.results[0].game_role_id, cached_role.id)
+        self.assertEqual(summary.results[0].status, "already_signed")
+        self.assertEqual(summary.results[1].game_role_id, pending_role.id)
+        self.assertEqual(summary.results[1].status, "success")
+        self.assertEqual(len(logs), 2)
+        service._ensure_device_state.assert_awaited_once()
+        service._checkin_role.assert_awaited_once()
+
+    async def test_execute_for_user_does_not_reuse_yesterday_success_log(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
+            session.add(role)
+            await session.flush()
+            session.add(
+                TaskLog(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    task_type="checkin",
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=7,
+                    executed_at=datetime(2026, 3, 15, 16, 30, 0),
+                )
+            )
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 8})
+            service._do_sign = AsyncMock(
+                return_value=CheckinResult(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=8,
+                )
+            )
+            service._sleep_between_info_and_sign = AsyncMock()
+            service._sleep_between_roles = AsyncMock()
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"), patch(
+                "app.services.checkin.get_current_app_date",
+                return_value=date(2026, 3, 17),
+                create=True,
+            ):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.success, 1)
+        self.assertEqual(summary.already_signed, 0)
+        service._get_sign_info.assert_awaited_once()
+        service._do_sign.assert_awaited_once()
 
     async def test_execute_for_user_runs_bh3_cn_checkin(self):
         async with await self._new_session() as session:

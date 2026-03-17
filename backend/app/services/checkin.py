@@ -40,7 +40,7 @@ from app.utils.device import (
     generate_device_id,
 )
 from app.utils.ds import generate_cn_dynamic_secret, generate_ds
-from app.utils.timezone import utc_now_naive
+from app.utils.timezone import get_app_day_utc_range, get_current_app_date, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,57 @@ class CheckinService:
             "game_nickname": (role.nickname or role.game_uid) if role else None,
         }
 
+    async def _load_today_latest_role_logs(self, account_ids: list[int]) -> dict[int, TaskLog]:
+        """
+        读取当前业务日内每个角色的最新签到日志。
+
+        这里必须先按“角色 -> 当天最新一条日志”收敛，再决定是否短路：
+        - 若只看“今天是否存在成功日志”，会把“上午成功、下午失败后用户想重试”的场景误判为不可重试
+        - 若改成账号级缓存，则会把同账号里尚未完成的其他角色一并跳过，破坏现有角色级语义
+        """
+        if not account_ids:
+            return {}
+
+        today_start, today_end = get_app_day_utc_range(get_current_app_date())
+        result = await self.db.execute(
+            select(TaskLog).where(
+                TaskLog.account_id.in_(account_ids),
+                TaskLog.task_type == "checkin",
+                TaskLog.game_role_id.is_not(None),
+                TaskLog.executed_at >= today_start,
+                TaskLog.executed_at < today_end,
+            ).order_by(TaskLog.executed_at.desc(), TaskLog.id.desc())
+        )
+        logs = result.scalars().all()
+
+        latest_logs: dict[int, TaskLog] = {}
+        for log in logs:
+            if log.game_role_id not in latest_logs:
+                latest_logs[log.game_role_id] = log
+        return latest_logs
+
+    def _build_reused_already_signed_result(
+        self,
+        account: MihoyoAccount,
+        role: GameRole,
+        latest_log: TaskLog,
+    ) -> CheckinResult:
+        """
+        基于当天最新成功态日志构造本次短路结果。
+
+        这里显式返回 `already_signed`，而不是原样复用 `success`，
+        是为了让本次结果准确表达“今天已完成，本次没有再请求上游接口”。
+        若把它继续伪装成 success，后续排障会误以为这次真的又成功打了一次远端签到。
+        """
+        return CheckinResult(
+            account_id=account.id,
+            game_role_id=role.id,
+            status="already_signed",
+            message="今日已签到（复用当日记录，未重复调用接口）",
+            total_sign_days=latest_log.total_sign_days,
+            **self._build_result_context(account, role),
+        )
+
     async def execute_for_user(self, user_id: int) -> CheckinSummary:
         """
         为指定用户的所有账号执行签到。
@@ -152,12 +203,14 @@ class CheckinService:
             )
         )
         accounts = result.scalars().all()
+        account_ids = [account.id for account in accounts]
 
         all_results: list[CheckinResult] = []
         login_state_service = LoginStateService(self.db)
+        latest_today_logs = await self._load_today_latest_role_logs(account_ids)
 
         async with httpx.AsyncClient(timeout=30) as client:
-            device_state = await self._ensure_device_state(client)
+            device_state: tuple[str, str] | None = None
 
             for account in accounts:
                 roles_result = await self.db.execute(
@@ -173,10 +226,24 @@ class CheckinService:
                     logger.info("账号 %s 没有已启用且已适配签到的游戏角色，跳过", account.id)
                     continue
 
+                roles_to_execute: list[GameRole] = []
+                for role in roles:
+                    latest_log = latest_today_logs.get(role.id)
+                    if latest_log and latest_log.status in ("success", "already_signed"):
+                        logger.info("角色 %s 今日已存在成功态日志，复用本地结果并跳过上游签到接口", role.game_uid)
+                        all_results.append(
+                            self._build_reused_already_signed_result(account, role, latest_log)
+                        )
+                        continue
+                    roles_to_execute.append(role)
+
+                if not roles_to_execute:
+                    continue
+
                 if account.cookie_status != "valid":
                     login_state = await login_state_service.refresh_account_login_state(account)
                     if login_state["cookie_status"] != "valid":
-                        for role in roles:
+                        for role in roles_to_execute:
                             all_results.append(
                                 CheckinResult(
                                     account_id=account.id,
@@ -196,7 +263,7 @@ class CheckinService:
                                 )
                             )
                         await self.db.commit()
-                        continue
+                    continue
 
                 try:
                     cookie = decrypt_cookie(account.cookie_encrypted)
@@ -212,7 +279,10 @@ class CheckinService:
                     )
                     continue
 
-                for role in roles:
+                if device_state is None:
+                    device_state = await self._ensure_device_state(client)
+
+                for role in roles_to_execute:
                     result = await self._checkin_role(account, role, cookie, client, device_state)
                     all_results.append(result)
                     self.db.add(
