@@ -9,7 +9,7 @@
 
 这些机制必须成套存在，不能只改其中某一项。
 如果后续维护时“看起来某个字段没用”而被删掉，最常见的后果就是：
-- 原神还能工作，星穹铁道 / 崩坏3 查询状态稳定失败
+- 原神还能工作，星穹铁道 / 崩坏3 / 绝区零中的某一条链路稳定失败
 - 接口偶发返回风控或参数校验错误，但日志只能看到泛化失败
 """
 
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 SIGN_INFO_URL = "https://api-takumi.mihoyo.com/event/luna/info"
 SIGN_URL = "https://api-takumi.mihoyo.com/event/luna/sign"
+SIGN_REWARDS_URL = "https://api-takumi.mihoyo.com/event/luna/home"
 GAME_ROLES_URL = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie"
 
 
@@ -52,6 +53,15 @@ GAME_ROLES_URL = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCo
 class CheckinGameConfig:
     act_id: str
     sign_game: str
+    # 并非所有签到活动都会接受 x-rpc-signgame。
+    # 崩坏3当前需按参考实现显式关闭该请求头；若误恢复为统一下发，
+    # 最直观的现象通常不是“参数非法”，而是上游持续返回业务态失败，排障成本很高。
+    send_sign_game: bool = True
+    info_url: str = SIGN_INFO_URL
+    sign_url: str = SIGN_URL
+    rewards_url: str = SIGN_REWARDS_URL
+    referer: str = "https://act.mihoyo.com/"
+    origin: str = "https://act.mihoyo.com"
 
 
 CHECKIN_GAME_CONFIGS: dict[str, CheckinGameConfig] = {
@@ -59,19 +69,37 @@ CHECKIN_GAME_CONFIGS: dict[str, CheckinGameConfig] = {
     "hk4e_bilibili": CheckinGameConfig(act_id="e202311201442471", sign_game="hk4e"),
     "hkrpg_cn": CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
     "hkrpg_bilibili": CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
-    # 崩坏3国服官服当前沿用 event/luna 链路，act_id 已通过官方 home 接口确认仍在线。
-    # 这里把 sign_game 固定为 bh3，是因为官方活动元数据返回 biz=bh3；
-    # 若后续米哈游调整该字段，必须连同测试和真实接口校验一起更新，不能只改前端文案。
-    "bh3_cn": CheckinGameConfig(act_id="e202207181446311", sign_game="bh3"),
+    # 崩坏3国服官服这里故意向参考仓库对齐为新的活动号，并关闭 x-rpc-signgame：
+    # 1. 用户实测旧 act_id 会稳定落入 -500007 维护态，说明“能打到接口”不等于“活动参数正确”
+    # 2. 参考实现对 bh3 只保留专用活动页 Referer，不发送 x-rpc-signgame
+    # 如果后续要改回统一头部，必须重新做真实账号验证，否则很容易回退到“查询链路表面可达、业务上始终失败”。
+    "bh3_cn": CheckinGameConfig(
+        act_id="e202306201626331",
+        sign_game="bh3",
+        send_sign_game=False,
+        referer="https://webstatic.mihoyo.com/bbs/event/signin/bh3/index.html?bbs_auth_required=true&act_id=e202306201626331&bbs_presentation_style=fullscreen&utm_source=bbs&utm_medium=mys&utm_campaign=icon",
+        origin="https://webstatic.mihoyo.com",
+    ),
+    # 绝区零国服官服不走通用 event/luna/info|sign，而是使用 act-nap-api 的 zzz 专属路径。
+    # 如果误复用旧链路，最常见症状不是“明确报参数错”，而是查询/签到始终落在业务失败里，难以定位。
+    "nap_cn": CheckinGameConfig(
+        act_id="e202406242138391",
+        sign_game="zzz",
+        info_url="https://act-nap-api.mihoyo.com/event/luna/zzz/info",
+        sign_url="https://act-nap-api.mihoyo.com/event/luna/zzz/sign",
+        rewards_url="https://act-nap-api.mihoyo.com/event/luna/zzz/home",
+        referer="https://act.hoyolab.com/bbs/event/signin/zzz/e202406242138391.html?act_id=e202406242138391",
+        origin="https://act.hoyolab.com",
+    ),
 }
 SUPPORTED_CHECKIN_BIZ = tuple(CHECKIN_GAME_CONFIGS.keys())
 
 
 def is_checkin_supported_game(game_biz: str) -> bool:
     """
-    当前仅原神、星穹铁道、崩坏3的国服官服签到链路已完成适配。
+    当前仅原神、星穹铁道、崩坏3、绝区零的国服官服签到链路已完成适配。
 
-    绝区零等角色即便已通过账号导入拿到，也不能误导性地继续走签到流程，
+    其他未接入角色即便已通过账号导入拿到，也不能误导性地继续走签到流程，
     否则最坏情况不是“签到失败”，而是向未验证接口发请求并制造脏日志。
     """
     return game_biz in CHECKIN_GAME_CONFIGS
@@ -263,10 +291,10 @@ class CheckinService:
             cookie,
             device_id=device_id,
             device_fp=device_fp,
-            sign_game=config.sign_game,
+            config=config,
         )
         response = await client.get(
-            SIGN_INFO_URL,
+            config.info_url,
             params={"act_id": config.act_id, "region": role.region, "uid": role.game_uid},
             headers=headers,
         )
@@ -295,12 +323,12 @@ class CheckinService:
             cookie,
             device_id=device_id,
             device_fp=device_fp,
-            sign_game=config.sign_game,
+            config=config,
             content_type="application/json",
         )
 
         response = await client.post(
-            SIGN_URL,
+            config.sign_url,
             content=body,
             headers=headers,
         )
@@ -406,17 +434,19 @@ class CheckinService:
         *,
         device_id: str,
         device_fp: str,
-        sign_game: str,
+        config: CheckinGameConfig,
         content_type: str | None = None,
     ) -> dict[str, str]:
         headers = build_hyperion_headers(
             cookie,
             device_id=device_id,
             device_fp=device_fp,
-            sign_game=sign_game,
+            sign_game=config.sign_game if config.send_sign_game else None,
             ds=generate_cn_dynamic_secret(HYPERION_SIGN_SALT),
             app_version=HYPERION_APP_VERSION,
         )
+        headers["Referer"] = config.referer
+        headers["Origin"] = config.origin
         if content_type:
             headers["Content-Type"] = content_type
         return headers

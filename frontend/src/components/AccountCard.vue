@@ -66,7 +66,7 @@ const gameNames: Record<string, string> = {
 // 这里的前端支持名单必须与后端实际放开的签到能力保持一致。
 // 如果只改后端不改这里，用户会看到“明明能签却仍显示未适配”；反过来若前端先放开，
 // 又会把仍未接入的游戏误导成可用状态，增加排障成本。
-const supportedCheckinGames = new Set(['hk4e_cn', 'hk4e_bilibili', 'hkrpg_cn', 'hkrpg_bilibili', 'bh3_cn'])
+const supportedCheckinGames = new Set(['hk4e_cn', 'hk4e_bilibili', 'hkrpg_cn', 'hkrpg_bilibili', 'bh3_cn', 'nap_cn'])
 
 function isCheckinSupported(gameBiz: string) {
   return supportedCheckinGames.has(gameBiz)

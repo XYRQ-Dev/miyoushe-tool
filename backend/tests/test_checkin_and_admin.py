@@ -73,7 +73,7 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
                 "ltuid=1;",
                 device_id="device-id",
                 device_fp="device-fp",
-                sign_game="hkrpg",
+                config=CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
             )
 
         self.assertEqual(headers["x-rpc-signgame"], "hkrpg")
@@ -83,24 +83,60 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("miHoYoBBS", headers["User-Agent"])
         self.assertTrue(headers["DS"])
 
-    async def test_build_checkin_headers_supports_bh3_signgame(self):
+    async def test_build_checkin_headers_omits_bh3_signgame_and_uses_bh3_referer(self):
         async with await self._new_session() as session:
             service = CheckinService(session)
             headers = service._build_checkin_headers(
                 "ltuid=1;",
                 device_id="device-id",
                 device_fp="device-fp",
-                sign_game="bh3",
+                config=CheckinGameConfig(
+                    act_id="e202306201626331",
+                    sign_game="bh3",
+                    send_sign_game=False,
+                    referer="https://webstatic.mihoyo.com/bbs/event/signin/bh3/index.html?bbs_auth_required=true&act_id=e202306201626331&bbs_presentation_style=fullscreen&utm_source=bbs&utm_medium=mys&utm_campaign=icon",
+                ),
             )
 
-        self.assertEqual(headers["x-rpc-signgame"], "bh3")
+        self.assertNotIn("x-rpc-signgame", headers)
+        self.assertEqual(headers["Referer"], "https://webstatic.mihoyo.com/bbs/event/signin/bh3/index.html?bbs_auth_required=true&act_id=e202306201626331&bbs_presentation_style=fullscreen&utm_source=bbs&utm_medium=mys&utm_campaign=icon")
+
+    async def test_build_checkin_headers_supports_zzz_signgame(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+            headers = service._build_checkin_headers(
+                "ltuid=1;",
+                device_id="device-id",
+                device_fp="device-fp",
+                config=CheckinGameConfig(
+                    act_id="e202406242138391",
+                    sign_game="zzz",
+                    info_url="https://act-nap-api.mihoyo.com/event/luna/zzz/info",
+                    sign_url="https://act-nap-api.mihoyo.com/event/luna/zzz/sign",
+                    rewards_url="https://act-nap-api.mihoyo.com/event/luna/zzz/home",
+                ),
+            )
+
+        self.assertEqual(headers["x-rpc-signgame"], "zzz")
 
     async def test_bh3_cn_uses_expected_checkin_game_config(self):
         config = CHECKIN_GAME_CONFIGS.get("bh3_cn")
 
         self.assertIsNotNone(config)
-        self.assertEqual(config.act_id, "e202207181446311")
+        self.assertEqual(config.act_id, "e202306201626331")
         self.assertEqual(config.sign_game, "bh3")
+        self.assertFalse(config.send_sign_game)
+        self.assertIn("act_id=e202306201626331", config.referer)
+
+    async def test_nap_cn_uses_expected_checkin_game_config(self):
+        config = CHECKIN_GAME_CONFIGS.get("nap_cn")
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.act_id, "e202406242138391")
+        self.assertEqual(config.sign_game, "zzz")
+        self.assertEqual(config.info_url, "https://act-nap-api.mihoyo.com/event/luna/zzz/info")
+        self.assertEqual(config.sign_url, "https://act-nap-api.mihoyo.com/event/luna/zzz/sign")
+        self.assertEqual(config.rewards_url, "https://act-nap-api.mihoyo.com/event/luna/zzz/home")
 
     async def test_utc_now_helpers_return_utc_with_and_without_tzinfo(self):
         aware_now = utc_now()
@@ -208,12 +244,42 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         service._get_sign_info.assert_awaited_once()
         service._do_sign.assert_awaited_once()
 
+    async def test_execute_for_user_runs_nap_cn_checkin(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="nap_cn", game_uid="20001", region="prod_gf_cn", is_enabled=True)
+            session.add(role)
+            await session.commit()
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 5})
+            service._do_sign = AsyncMock(
+                return_value=CheckinResult(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    status="success",
+                    message="签到成功",
+                    total_sign_days=5,
+                )
+            )
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
+                summary = await service.execute_for_user(1)
+
+        self.assertEqual(summary.total, 1)
+        self.assertEqual(summary.success, 1)
+        service._get_sign_info.assert_awaited_once()
+        service._do_sign.assert_awaited_once()
+
     async def test_execute_for_user_still_skips_unsupported_games_without_logging_failure(self):
         async with await self._new_session() as session:
             account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
-            session.add(GameRole(account_id=account.id, game_biz="nap_cn", game_uid="20001", region="prod_gf_jp", is_enabled=True))
+            session.add(GameRole(account_id=account.id, game_biz="nxx_cn", game_uid="40001", region="prod_gf_cn", is_enabled=True))
             await session.commit()
 
             service = CheckinService(session)
@@ -238,13 +304,67 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             await service._get_sign_info(
                 client,
                 "ltuid=1;",
-                CheckinGameConfig(act_id="e202207181446311", sign_game="bh3"),
+                CheckinGameConfig(
+                    act_id="e202306201626331",
+                    sign_game="bh3",
+                    send_sign_game=False,
+                    referer="https://webstatic.mihoyo.com/bbs/event/signin/bh3/index.html?bbs_auth_required=true&act_id=e202306201626331&bbs_presentation_style=fullscreen&utm_source=bbs&utm_medium=mys&utm_campaign=icon",
+                ),
                 role,
                 ("device-id", "device-fp"),
             )
 
-        self.assertEqual(client.last_get["params"]["act_id"], "e202207181446311")
-        self.assertEqual(client.last_get["headers"]["x-rpc-signgame"], "bh3")
+        self.assertEqual(client.last_get["params"]["act_id"], "e202306201626331")
+        self.assertNotIn("x-rpc-signgame", client.last_get["headers"])
+        self.assertIn("act_id=e202306201626331", client.last_get["headers"]["Referer"])
+
+    async def test_get_sign_info_uses_zzz_checkin_info_url_and_act_id(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+            role = GameRole(id=4, account_id=1, game_biz="nap_cn", game_uid="20001", region="prod_gf_cn")
+            client = FakeClient(get_payload={"retcode": 0, "data": {"is_sign": False, "total_sign_day": 4}})
+
+            await service._get_sign_info(
+                client,
+                "ltuid=1;",
+                CheckinGameConfig(
+                    act_id="e202406242138391",
+                    sign_game="zzz",
+                    info_url="https://act-nap-api.mihoyo.com/event/luna/zzz/info",
+                    sign_url="https://act-nap-api.mihoyo.com/event/luna/zzz/sign",
+                    rewards_url="https://act-nap-api.mihoyo.com/event/luna/zzz/home",
+                ),
+                role,
+                ("device-id", "device-fp"),
+            )
+
+        self.assertEqual(client.last_get["url"], "https://act-nap-api.mihoyo.com/event/luna/zzz/info")
+        self.assertEqual(client.last_get["params"]["act_id"], "e202406242138391")
+        self.assertEqual(client.last_get["headers"]["x-rpc-signgame"], "zzz")
+
+    async def test_do_sign_uses_zzz_checkin_sign_url(self):
+        async with await self._new_session() as session:
+            service = CheckinService(session)
+            role = GameRole(id=5, account_id=1, game_biz="nap_cn", game_uid="20001", region="prod_gf_cn")
+            client = FakeClient(post_payload={"retcode": 0, "data": {"total_sign_day": 6}})
+
+            await service._do_sign(
+                client,
+                "ltuid=1;",
+                CheckinGameConfig(
+                    act_id="e202406242138391",
+                    sign_game="zzz",
+                    info_url="https://act-nap-api.mihoyo.com/event/luna/zzz/info",
+                    sign_url="https://act-nap-api.mihoyo.com/event/luna/zzz/sign",
+                    rewards_url="https://act-nap-api.mihoyo.com/event/luna/zzz/home",
+                ),
+                MihoyoAccount(id=1, user_id=1, nickname="测试账号"),
+                role,
+                ("device-id", "device-fp"),
+            )
+
+        self.assertEqual(client.last_post["url"], "https://act-nap-api.mihoyo.com/event/luna/zzz/sign")
+        self.assertEqual(client.last_post["headers"]["x-rpc-signgame"], "zzz")
 
     async def test_refresh_device_fp_accepts_real_world_payload_shape(self):
         async with await self._new_session() as session:
