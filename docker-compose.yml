@@ -11,6 +11,9 @@ services:
       # SQLite 数据库文件持久化到宿主机
       - ./data:/app/data
     environment:
+      # 容器本地时区同时影响 Python logging 与 Uvicorn 访问日志的显示时间。
+      # 这里显式固定为东八区，避免 docker logs 与前端展示/运维认知相差 8 小时。
+      - TZ=Asia/Shanghai
       # JWT 签名密钥（生产环境必须修改为强随机值）
       - SECRET_KEY=${SECRET_KEY:-change_me_to_a_strong_random_string}
       # Cookie 加密密钥（生产环境必须修改）

@@ -87,8 +87,8 @@
       <el-form label-width="120px">
         <el-form-item label="深色模式">
           <el-switch
-            v-model="userStore.darkMode"
-            @change="userStore.toggleDarkMode()"
+            :model-value="userStore.darkMode"
+            @change="userStore.setDarkMode"
             active-text="开启"
             inactive-text="关闭"
           />

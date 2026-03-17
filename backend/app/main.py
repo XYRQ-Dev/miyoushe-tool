@@ -29,6 +29,9 @@ from app.services.checkin import CheckinService
 from app.utils.crypto import encrypt_cookie
 
 # 配置日志
+# 这里的 %(asctime)s 走的是进程所在系统时区，而不是 settings.APP_TIMEZONE。
+# 因此 Docker 场景下若希望业务日志与 Uvicorn 访问日志都显示东八区，
+# 必须在容器层统一 TZ；不要只改这里的格式串，否则会造成“前端时间是东八区、docker logs 还是 UTC”的割裂。
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

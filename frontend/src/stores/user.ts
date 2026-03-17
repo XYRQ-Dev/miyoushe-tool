@@ -49,14 +49,20 @@ export const useUserStore = defineStore('user', () => {
     userInfo.value = null
   }
 
-  function toggleDarkMode() {
-    darkMode.value = !darkMode.value
+  function setDarkMode(enabled: boolean) {
+    // 表单型开关会把“目标值”直接传进来；这里必须按目标值写入，
+    // 不能再做一次取反，否则和 el-switch 自身的状态更新叠加后会出现“点了又弹回去”的双重切换问题。
+    darkMode.value = enabled
     localStorage.setItem('dark_mode', String(darkMode.value))
     if (darkMode.value) {
       document.documentElement.classList.add('dark')
     } else {
       document.documentElement.classList.remove('dark')
     }
+  }
+
+  function toggleDarkMode() {
+    setDarkMode(!darkMode.value)
   }
 
   // 初始化深色模式
@@ -73,6 +79,7 @@ export const useUserStore = defineStore('user', () => {
     register,
     fetchUserInfo,
     logout,
+    setDarkMode,
     toggleDarkMode,
   }
 })
