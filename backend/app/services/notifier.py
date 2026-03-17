@@ -12,6 +12,8 @@
 
 import logging
 from datetime import date
+from email.header import Header
+from email.utils import formataddr
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
@@ -169,7 +171,12 @@ class NotificationService:
             logger.info(f"签到报告邮件已发送至 {user.email}")
         except Exception as e:
             # 邮件发送失败不影响签到结果
-            logger.error(f"发送邮件失败: {e}")
+            logger.error(
+                "发送邮件失败: to=%s, from=%s, error=%s",
+                user.email,
+                smtp_config.get("sender_email", ""),
+                e,
+            )
 
     async def _send_email(self, to_email: str, summary: CheckinSummary, smtp_config: dict):
         """通过 SMTP 发送 HTML 邮件"""
@@ -185,7 +192,14 @@ class NotificationService:
         msg = MIMEMultipart("alternative")
         sender_name = smtp_config.get("sender_name", "").strip()
         sender_email = smtp_config["sender_email"]
-        msg["From"] = f"{sender_name} <{sender_email}>" if sender_name else sender_email
+        # 发件人名称和邮箱地址必须分别按 RFC 规范编码。
+        # 若把“中文名称 <邮箱>”整段直接塞进 From 头，序列化后很容易被当成一个整体编码，
+        # 部分 SMTP 服务商（如 QQ 邮箱）会判定该头缺失或格式非法并拒收。
+        msg["From"] = (
+            formataddr((str(Header(sender_name, "utf-8")), sender_email))
+            if sender_name
+            else sender_email
+        )
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(html_content, "html", "utf-8"))

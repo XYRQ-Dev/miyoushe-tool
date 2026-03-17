@@ -1,6 +1,7 @@
 import json
 import unittest
 from datetime import datetime, timedelta, timezone, date
+from email.header import decode_header
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
@@ -361,6 +362,76 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             await service.send_checkin_report(user.id, summary, session)
 
         service._send_email.assert_not_awaited()
+
+    async def test_send_email_formats_chinese_sender_name_as_rfc_address(self):
+        async with await self._new_session() as session:
+            service = NotificationService()
+            summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+            smtp_config = {
+                "hostname": "smtp.example.com",
+                "port": 465,
+                "username": "mailer@example.com",
+                "password": "secret",
+                "use_ssl": True,
+                "sender_name": "米游社签到助手",
+                "sender_email": "mailer@example.com",
+            }
+
+            with patch("app.services.notifier.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+                await service._send_email("notify@example.com", summary, smtp_config)
+
+        msg = mock_send.await_args.args[0]
+        serialized_from = next(
+            line for line in msg.as_string().splitlines() if line.startswith("From:")
+        )
+        self.assertIn("<mailer@example.com>", serialized_from)
+        self.assertNotIn("=?utf-8?b?57Gz5ri456S+562+5Yiw5Yqp5omLIDxtYWlsZXJAZXhhbXBsZS5jb20+", serialized_from)
+        from_header = msg["From"]
+        decoded_parts = []
+        for value, charset in decode_header(from_header):
+            if isinstance(value, bytes):
+                decoded_parts.append(value.decode(charset or "utf-8"))
+            else:
+                decoded_parts.append(value)
+        decoded_from = "".join(decoded_parts)
+        self.assertEqual(decoded_from, "米游社签到助手 <mailer@example.com>")
+
+    async def test_send_email_uses_plain_address_when_sender_name_is_empty(self):
+        async with await self._new_session() as session:
+            service = NotificationService()
+            summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+            smtp_config = {
+                "hostname": "smtp.example.com",
+                "port": 465,
+                "username": "mailer@example.com",
+                "password": "secret",
+                "use_ssl": True,
+                "sender_name": "",
+                "sender_email": "mailer@example.com",
+            }
+
+            with patch("app.services.notifier.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+                await service._send_email("notify@example.com", summary, smtp_config)
+
+        msg = mock_send.await_args.args[0]
+        serialized_from = next(
+            line for line in msg.as_string().splitlines() if line.startswith("From:")
+        )
+        self.assertEqual(serialized_from, "From: mailer@example.com")
 
     async def test_manual_execute_checkin_triggers_notification_service(self):
         async with await self._new_session() as session:
