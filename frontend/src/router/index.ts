@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useUserStore } from '../stores/user'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -34,6 +35,12 @@ const router = createRouter({
           name: 'Settings',
           component: () => import('../views/Settings.vue'),
         },
+        {
+          path: 'admin/users',
+          name: 'AdminUsers',
+          component: () => import('../views/AdminUsers.vue'),
+          meta: { requiresAdmin: true },
+        },
       ],
     },
   ],
@@ -42,9 +49,12 @@ const router = createRouter({
 // 路由守卫：未登录跳转到登录页
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('access_token')
+  const userStore = useUserStore()
   if (to.meta.requiresAuth !== false && !token) {
     next('/login')
   } else if (to.path === '/login' && token) {
+    next('/')
+  } else if (to.meta.requiresAdmin && !userStore.isAdmin) {
     next('/')
   } else {
     next()

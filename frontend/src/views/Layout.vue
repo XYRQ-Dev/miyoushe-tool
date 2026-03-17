@@ -33,6 +33,10 @@
           <el-icon><Document /></el-icon>
           <template #title>签到日志</template>
         </el-menu-item>
+        <el-menu-item v-if="userStore.isAdmin" index="/admin/users">
+          <el-icon><UserFilled /></el-icon>
+          <template #title>用户信息列表</template>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <template #title>系统设置</template>
@@ -101,7 +105,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
-  Star, Odometer, User, Document, Setting,
+  Star, Odometer, User, UserFilled, Document, Setting,
   Expand, Fold, ArrowDown, SwitchButton, Sunny, Moon,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
@@ -118,6 +122,7 @@ const pageTitle = computed(() => {
     '/': '仪表盘',
     '/accounts': '账号管理',
     '/logs': '签到日志',
+    '/admin/users': '用户信息列表',
     '/settings': '系统设置',
   }
   return map[route.path] || '米游社签到'

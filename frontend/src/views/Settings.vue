@@ -153,55 +153,12 @@
       </el-form>
     </el-card>
 
-    <el-card v-if="userStore.isAdmin" class="settings-card" shadow="never">
-      <template #header>
-        <div class="card-title">
-          <el-icon><Setting /></el-icon>
-          <span>用户管理（管理员）</span>
-        </div>
-      </template>
-
-      <el-table :data="users" stripe>
-        <el-table-column label="用户名" prop="username" />
-        <el-table-column label="角色" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.role === 'admin' ? 'danger' : 'info'" size="small">
-              {{ row.role === 'admin' ? '管理员' : '用户' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">
-              {{ row.is_active ? '正常' : '已禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="注册时间" width="180">
-          <template #default="{ row }">
-            {{ new Date(row.created_at).toLocaleString('zh-CN') }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button
-              v-if="row.id !== userStore.userInfo?.id"
-              size="small"
-              :type="row.is_active ? 'danger' : 'success'"
-              @click="toggleUser(row)"
-            >
-              {{ row.is_active ? '禁用' : '启用' }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { User, Clock, Sunny, Setting, Message } from '@element-plus/icons-vue'
+import { User, Clock, Sunny, Message } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '../stores/user'
 import { authApi, taskApi, adminApi } from '../api'
@@ -210,7 +167,6 @@ const userStore = useUserStore()
 const saving = ref(false)
 const savingTask = ref(false)
 const savingEmailSettings = ref(false)
-const users = ref<any[]>([])
 
 const userForm = reactive({
   email: '',
@@ -255,11 +211,7 @@ async function loadSettings() {
   // 管理员加载用户列表
   if (userStore.isAdmin) {
     try {
-      const [{ data: userList }, { data: emailSettings }] = await Promise.all([
-        adminApi.listUsers(),
-        adminApi.getEmailSettings(),
-      ])
-      users.value = userList
+      const { data: emailSettings } = await adminApi.getEmailSettings()
       Object.assign(emailSettingsForm, emailSettings, { smtp_password: '' })
     } catch (e) {
       // 忽略
@@ -306,17 +258,6 @@ async function saveEmailSettings() {
     ElMessage.success('系统邮件配置已保存')
   } finally {
     savingEmailSettings.value = false
-  }
-}
-
-async function toggleUser(user: any) {
-  try {
-    await adminApi.toggleUser(user.id)
-    ElMessage.success(`用户已${user.is_active ? '禁用' : '启用'}`)
-    const { data } = await adminApi.listUsers()
-    users.value = data
-  } catch (e) {
-    // 错误已在拦截器中处理
   }
 }
 
