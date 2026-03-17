@@ -6,7 +6,6 @@ Cookie 管理服务
 """
 
 import logging
-from datetime import datetime
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +14,7 @@ from app.models.account import MihoyoAccount
 from app.utils.crypto import encrypt_cookie, decrypt_cookie
 from app.utils.ds import generate_ds
 from app.utils.device import get_default_headers, generate_device_id
+from app.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class CookieService:
         """加密并保存 Cookie"""
         account.cookie_encrypted = encrypt_cookie(cookie_str)
         account.cookie_status = "valid"
-        account.last_cookie_check = datetime.utcnow()
+        account.last_cookie_check = utc_now_naive()
         await self.db.commit()
 
     async def get_cookie(self, account: MihoyoAccount) -> str:

@@ -17,6 +17,26 @@ from app.config import settings
 APP_TIMEZONE = ZoneInfo(settings.APP_TIMEZONE)
 
 
+def utc_now() -> datetime:
+    """
+    返回时区感知的 UTC 当前时间。
+
+    Python 3.12+ 已弃用 `datetime.utcnow()`；统一从这里取 UTC 时间，
+    可以避免各模块继续散落过时写法，也能明确“当前值带 UTC 时区”。
+    """
+    return datetime.now(timezone.utc)
+
+
+def utc_now_naive() -> datetime:
+    """
+    返回按 UTC 解释的无时区当前时间，供当前 SQLite 模型落库使用。
+
+    现有数据库字段大多仍是无时区 `DateTime`，直接写 aware datetime
+    会带来 ORM / 驱动兼容差异；这里显式去掉 tzinfo，保持现有存储约定不变。
+    """
+    return utc_now().replace(tzinfo=None)
+
+
 def get_current_app_date() -> date:
     """返回应用时区下的当前日期。"""
     return datetime.now(APP_TIMEZONE).date()

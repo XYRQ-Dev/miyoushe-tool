@@ -5,7 +5,6 @@
 
 import logging
 import random
-from datetime import datetime
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -18,6 +17,7 @@ from app.models.user import User
 from app.models.account import MihoyoAccount
 from app.models.task_log import TaskConfig
 from app.services.checkin import CheckinService
+from app.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class SchedulerService:
             for account in accounts:
                 is_valid = await cookie_service.verify_cookie(account)
                 account.cookie_status = "valid" if is_valid else "expired"
-                account.last_cookie_check = datetime.utcnow()
+                account.last_cookie_check = utc_now_naive()
 
             await db.commit()
             logger.info(f"Cookie 检测完成，共检测 {len(accounts)} 个账号")

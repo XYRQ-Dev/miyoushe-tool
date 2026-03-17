@@ -31,6 +31,22 @@ from app.schemas.task_log import CheckinSummary
 
 logger = logging.getLogger(__name__)
 
+GAME_NAME_MAP = {
+    "hk4e_cn": "原神",
+    "hk4e_bilibili": "原神(B服)",
+    "hkrpg_cn": "星穹铁道",
+    "hkrpg_bilibili": "星铁(B服)",
+    "nap_cn": "绝区零",
+    "bh3_cn": "崩坏3",
+}
+
+STATUS_NAME_MAP = {
+    "success": "成功",
+    "already_signed": "已签到",
+    "failed": "失败",
+    "risk": "风控",
+}
+
 # 签到报告邮件 HTML 模板
 EMAIL_TEMPLATE = Template("""
 <!DOCTYPE html>
@@ -38,29 +54,43 @@ EMAIL_TEMPLATE = Template("""
 <head>
 <meta charset="utf-8">
 <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; }
-    .container { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
-    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 24px; text-align: center; }
-    .header h1 { margin: 0; font-size: 20px; }
-    .header p { margin: 8px 0 0; opacity: 0.9; font-size: 14px; }
-    .summary { display: flex; justify-content: space-around; padding: 20px; background: #f8f9ff; }
-    .summary-item { text-align: center; }
-    .summary-item .num { font-size: 28px; font-weight: bold; }
-    .summary-item .label { font-size: 12px; color: #666; margin-top: 4px; }
-    .success .num { color: #52c41a; }
-    .failed .num { color: #ff4d4f; }
-    .signed .num { color: #999; }
-    .risk .num { color: #faad14; }
-    .details { padding: 20px; }
-    .details h3 { margin: 0 0 12px; font-size: 16px; color: #333; }
-    table { width: 100%; border-collapse: collapse; }
-    th { background: #f5f7fa; padding: 10px; text-align: left; font-size: 13px; color: #666; }
-    td { padding: 10px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
-    .status-success { color: #52c41a; font-weight: bold; }
-    .status-failed { color: #ff4d4f; font-weight: bold; }
-    .status-signed { color: #999; }
-    .status-risk { color: #faad14; font-weight: bold; }
-    .footer { padding: 16px; text-align: center; color: #999; font-size: 12px; border-top: 1px solid #f0f0f0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f5f9; margin: 0; padding: 12px; color: #1f2937; }
+    .container { max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 18px; overflow: hidden; box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08); }
+    .header { background: linear-gradient(160deg, #5b7cfa 0%, #3957d7 100%); color: #ffffff; padding: 24px 20px 18px; }
+    .header h1 { margin: 0; font-size: 22px; line-height: 1.3; }
+    .header p { margin: 8px 0 0; font-size: 13px; opacity: 0.9; }
+    .summary { padding: 18px 16px 8px; background: #ffffff; }
+    .summary-title { font-size: 15px; font-weight: 700; color: #111827; margin: 0 0 12px; }
+    .summary-highlight { background: #eef4ff; border: 1px solid #dbe7ff; border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+    .summary-highlight .label { font-size: 12px; color: #5b6475; margin-bottom: 6px; }
+    .summary-highlight .value { font-size: 26px; font-weight: 700; color: #1d4ed8; line-height: 1.2; }
+    .summary-highlight .subvalue { font-size: 13px; color: #4b5563; margin-top: 4px; }
+    .summary-grid { width: 100%; }
+    .summary-grid td { width: 50%; padding: 0 0 10px; vertical-align: top; }
+    .summary-chip { display: inline-block; min-width: 110px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; }
+    .summary-chip .chip-label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+    .summary-chip .chip-value { display: block; font-size: 18px; font-weight: 700; color: #111827; }
+    .summary-chip.success .chip-value { color: #15803d; }
+    .summary-chip.signed .chip-value { color: #6b7280; }
+    .summary-chip.failed .chip-value { color: #dc2626; }
+    .summary-chip.risk .chip-value { color: #d97706; }
+    .details { padding: 8px 16px 16px; }
+    .details h3 { margin: 0 0 12px; font-size: 15px; font-weight: 700; color: #111827; }
+    .result-card { border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px; margin-bottom: 12px; background: #ffffff; }
+    .result-card:last-child { margin-bottom: 0; }
+    .card-head { overflow: hidden; margin-bottom: 10px; }
+    .card-title { font-size: 15px; font-weight: 700; color: #111827; line-height: 1.4; }
+    .card-subtitle { font-size: 12px; color: #6b7280; margin-top: 4px; line-height: 1.5; }
+    .status-tag { float: right; display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 4px 10px; }
+    .status-success { color: #166534; background: #dcfce7; }
+    .status-already_signed { color: #4b5563; background: #f3f4f6; }
+    .status-failed { color: #b91c1c; background: #fee2e2; }
+    .status-risk { color: #b45309; background: #fef3c7; }
+    .meta-table { width: 100%; border-collapse: collapse; }
+    .meta-table td { padding: 6px 0; font-size: 13px; vertical-align: top; }
+    .meta-table .meta-label { width: 64px; color: #6b7280; }
+    .meta-table .meta-value { color: #111827; word-break: break-word; }
+    .footer { padding: 14px 16px 18px; text-align: center; color: #9ca3af; font-size: 12px; border-top: 1px solid #edf2f7; background: #fcfcfd; }
 </style>
 </head>
 <body>
@@ -70,29 +100,44 @@ EMAIL_TEMPLATE = Template("""
         <p>{{ today }}</p>
     </div>
     <div class="summary">
-        <div class="summary-item success"><div class="num">{{ summary.success }}</div><div class="label">成功</div></div>
-        <div class="summary-item failed"><div class="num">{{ summary.failed }}</div><div class="label">失败</div></div>
-        <div class="summary-item signed"><div class="num">{{ summary.already_signed }}</div><div class="label">已签到</div></div>
-        <div class="summary-item risk"><div class="num">{{ summary.risk }}</div><div class="label">风控</div></div>
+        <div class="summary-title">执行总览</div>
+        <div class="summary-highlight">
+            <div class="label">执行总数</div>
+            <div class="value">{{ summary.total }}</div>
+            <div class="subvalue">异常 {{ summary.failed + summary.risk }} 条</div>
+        </div>
+        <table class="summary-grid" role="presentation">
+            <tr>
+                <td><span class="summary-chip success"><span class="chip-label">成功</span><span class="chip-value">{{ summary.success }}</span></span></td>
+                <td><span class="summary-chip signed"><span class="chip-label">已签到</span><span class="chip-value">{{ summary.already_signed }}</span></span></td>
+            </tr>
+            <tr>
+                <td><span class="summary-chip failed"><span class="chip-label">失败</span><span class="chip-value">{{ summary.failed }}</span></span></td>
+                <td><span class="summary-chip risk"><span class="chip-label">风控</span><span class="chip-value">{{ summary.risk }}</span></span></td>
+            </tr>
+        </table>
     </div>
     <div class="details">
-        <h3>签到详情</h3>
-        <table>
-            <tr><th>状态</th><th>信息</th><th>签到天数</th></tr>
-            {% for r in summary.results %}
-            <tr>
-                <td class="status-{{ r.status }}">
-                    {% if r.status == 'success' %}成功
-                    {% elif r.status == 'failed' %}失败
-                    {% elif r.status == 'already_signed' %}已签到
-                    {% elif r.status == 'risk' %}风控
-                    {% endif %}
-                </td>
-                <td>{{ r.message }}</td>
-                <td>{{ r.total_sign_days or '-' }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <h3>结果详情</h3>
+        {% for r in ordered_results %}
+        <div class="result-card">
+            <div class="card-head">
+                <span class="status-tag status-{{ r.status }}">{{ status_names.get(r.status, r.status) }}</span>
+                <div class="card-title">{{ r.account_nickname or '未命名账号' }}</div>
+                <div class="card-subtitle">{{ game_names.get(r.game_biz, r.game_biz or '未知游戏') }} · {{ r.game_nickname or '未命名角色' }}</div>
+            </div>
+            <table class="meta-table" role="presentation">
+                <tr>
+                    <td class="meta-label">结果</td>
+                    <td class="meta-value">{{ r.message }}</td>
+                </tr>
+                <tr>
+                    <td class="meta-label">签到天数</td>
+                    <td class="meta-value">{{ r.total_sign_days or '-' }}</td>
+                </tr>
+            </table>
+        </div>
+        {% endfor %}
     </div>
     <div class="footer">此邮件由米游社自动签到系统发送</div>
 </div>
@@ -103,6 +148,26 @@ EMAIL_TEMPLATE = Template("""
 
 class NotificationService:
     """邮件通知服务"""
+
+    @staticmethod
+    def _result_sort_key(result) -> tuple[int, str, int]:
+        """
+        邮件展示顺序与原始执行顺序解耦。
+
+        用户更关心手机端阅读体验，这里按“成功优先、已签到其次、失败和风控靠后”排序，
+        只影响邮件展示，不改变原始签到结果语义。
+        """
+        priority = {
+            "success": 0,
+            "already_signed": 1,
+            "failed": 2,
+            "risk": 3,
+        }
+        return (
+            priority.get(result.status, 99),
+            result.account_nickname or "",
+            result.account_id,
+        )
 
     async def _load_smtp_config(self, db: AsyncSession) -> dict | None:
         """
@@ -187,6 +252,9 @@ class NotificationService:
         html_content = EMAIL_TEMPLATE.render(
             today=today,
             summary=summary,
+            game_names=GAME_NAME_MAP,
+            status_names=STATUS_NAME_MAP,
+            ordered_results=sorted(summary.results, key=self._result_sort_key),
         )
 
         msg = MIMEMultipart("alternative")

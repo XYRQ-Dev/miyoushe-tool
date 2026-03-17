@@ -4,9 +4,10 @@
 - GameRole：游戏角色（一个米游社账号下可有多个游戏角色）
 """
 
-from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+
 from app.database import Base
+from app.utils.timezone import utc_now_naive
 
 
 class MihoyoAccount(Base):
@@ -21,7 +22,9 @@ class MihoyoAccount(Base):
     # Cookie 状态：valid / expired / unknown
     cookie_status = Column(String(20), default="valid")
     last_cookie_check = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    # 当前模型字段仍以“无时区 UTC”存库；若直接继续引用 datetime.utcnow，
+    # Python 3.12+ 会产生弃用告警，且容易让后续维护者误以为这里是推荐写法。
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class GameRole(Base):

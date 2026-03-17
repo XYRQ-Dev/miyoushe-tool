@@ -5,13 +5,12 @@
 从而导致数据库里出现多行配置或设备标识漂移。
 """
 
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.system_setting import SystemSetting
+from app.utils.timezone import utc_now_naive
 
 
 class SystemSettingsService:
@@ -51,7 +50,7 @@ class SystemSettingsService:
             smtp_enabled=False,
             smtp_port=465,
             smtp_use_ssl=True,
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now_naive(),
         )
         self.db.add(config)
         await self.db.flush()

@@ -6,7 +6,7 @@
 - 刷新 token
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select, func
@@ -21,6 +21,7 @@ from app.schemas.user import (
     UserCreate, UserLogin, UserResponse, UserUpdate,
     TokenResponse, TokenData,
 )
+from app.utils.timezone import utc_now
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -31,7 +32,7 @@ security_scheme = HTTPBearer()
 def create_token(data: dict, expires_delta: timedelta) -> str:
     """生成 JWT Token"""
     to_encode = data.copy()
-    to_encode["exp"] = datetime.utcnow() + expires_delta
+    to_encode["exp"] = utc_now() + expires_delta
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 

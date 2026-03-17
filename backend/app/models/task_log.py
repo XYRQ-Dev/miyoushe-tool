@@ -4,9 +4,10 @@
 - TaskLog：每次签到的执行记录
 """
 
-from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+
 from app.database import Base
+from app.utils.timezone import utc_now_naive
 
 
 class TaskConfig(Base):
@@ -18,7 +19,8 @@ class TaskConfig(Base):
     # cron 表达式，默认每天早上 6 点
     cron_expr = Column(String(50), default="0 6 * * *")
     is_enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    # 调度配置创建时间沿用“无时区 UTC”存储约定，避免与旧数据比较时出现混乱。
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class TaskLog(Base):
@@ -32,4 +34,5 @@ class TaskLog(Base):
     status = Column(String(20), nullable=False)
     message = Column(Text, nullable=True)
     total_sign_days = Column(Integer, nullable=True)
-    executed_at = Column(DateTime, default=datetime.utcnow)
+    # 日志执行时间会再由 API 层转换成东八区返回前端；此处必须稳定保存 UTC 基准时间。
+    executed_at = Column(DateTime, default=utc_now_naive)

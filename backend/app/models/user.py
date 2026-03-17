@@ -4,9 +4,10 @@
 - 首个注册用户自动成为管理员
 """
 
-from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
+
 from app.database import Base
+from app.utils.timezone import utc_now_naive
 
 
 class User(Base):
@@ -23,4 +24,5 @@ class User(Base):
     # 角色：admin 或 user
     role = Column(String(10), default="user")
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    # 用户创建时间暂不改成带时区字段，避免数据库迁移范围扩大；统一通过工具函数生成 UTC。
+    created_at = Column(DateTime, default=utc_now_naive)

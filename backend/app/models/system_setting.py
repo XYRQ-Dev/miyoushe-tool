@@ -11,10 +11,10 @@
 - 后续若继续扩展系统级配置，也能保持入口一致
 """
 
-from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 from app.database import Base
+from app.utils.timezone import utc_now_naive
 
 
 class SystemSetting(Base):
@@ -37,4 +37,6 @@ class SystemSetting(Base):
     hyperion_device_fp = Column(String(64), nullable=True)
     hyperion_device_fp_updated_at = Column(DateTime, nullable=True)
 
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # 系统配置更新时间需要与其余 DateTime 字段保持同一套 UTC 语义；
+    # default/onupdate 若继续直接挂 datetime.utcnow，会在 SQLAlchemy 调用时触发弃用告警。
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)

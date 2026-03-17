@@ -20,6 +20,7 @@ from app.schemas.system_setting import AdminEmailSettingsUpdate
 from app.schemas.task_log import CheckinSummary, CheckinResult
 from app.services.checkin import CheckinApiError, CheckinGameConfig, CheckinService
 from app.services.notifier import NotificationService
+from app.utils.timezone import utc_now, utc_now_naive
 from app.utils.crypto import decrypt_text
 from app.utils.device import HYPERION_APP_VERSION
 
@@ -82,6 +83,14 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("miHoYoBBS", headers["User-Agent"])
         self.assertTrue(headers["DS"])
 
+    async def test_utc_now_helpers_return_utc_with_and_without_tzinfo(self):
+        aware_now = utc_now()
+        naive_now = utc_now_naive()
+
+        self.assertEqual(aware_now.tzinfo, timezone.utc)
+        self.assertIsNone(naive_now.tzinfo)
+        self.assertLess(abs((aware_now.replace(tzinfo=None) - naive_now).total_seconds()), 2)
+
     async def test_do_sign_sends_uid_as_string_and_recognizes_risk(self):
         async with await self._new_session() as session:
             service = CheckinService(session)
@@ -92,6 +101,7 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
                 client,
                 "ltuid=1;",
                 CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
+                MihoyoAccount(id=1, user_id=1, nickname="测试账号"),
                 role,
                 ("device-id", "device-fp"),
             )
@@ -432,6 +442,112 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             line for line in msg.as_string().splitlines() if line.startswith("From:")
         )
         self.assertEqual(serialized_from, "From: mailer@example.com")
+
+    async def test_send_email_renders_account_and_role_context_in_html(self):
+        async with await self._new_session() as session:
+            service = NotificationService()
+            summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[
+                    CheckinResult(
+                        account_id=1,
+                        game_role_id=2,
+                        account_nickname="测试账号",
+                        game_biz="hk4e_cn",
+                        game_nickname="胡桃",
+                        status="success",
+                        message="签到成功",
+                        total_sign_days=123,
+                    )
+                ],
+            )
+            smtp_config = {
+                "hostname": "smtp.example.com",
+                "port": 465,
+                "username": "mailer@example.com",
+                "password": "secret",
+                "use_ssl": True,
+                "sender_name": "签到助手",
+                "sender_email": "mailer@example.com",
+            }
+
+            with patch("app.services.notifier.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+                await service._send_email("notify@example.com", summary, smtp_config)
+
+        msg = mock_send.await_args.args[0]
+        html_part = msg.get_payload()[0].get_payload(decode=True).decode("utf-8")
+        self.assertIn("测试账号", html_part)
+        self.assertIn("原神", html_part)
+        self.assertIn("胡桃", html_part)
+        self.assertIn("123", html_part)
+
+    async def test_send_email_places_summary_before_details(self):
+        async with await self._new_session() as session:
+            service = NotificationService()
+            summary = CheckinSummary(
+                total=2,
+                success=1,
+                failed=1,
+                already_signed=0,
+                risk=0,
+                results=[
+                    CheckinResult(account_id=1, status="success", message="ok"),
+                    CheckinResult(account_id=2, status="failed", message="boom"),
+                ],
+            )
+            smtp_config = {
+                "hostname": "smtp.example.com",
+                "port": 465,
+                "username": "mailer@example.com",
+                "password": "secret",
+                "use_ssl": True,
+                "sender_name": "签到助手",
+                "sender_email": "mailer@example.com",
+            }
+
+            with patch("app.services.notifier.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+                await service._send_email("notify@example.com", summary, smtp_config)
+
+        html_part = mock_send.await_args.args[0].get_payload()[0].get_payload(decode=True).decode("utf-8")
+        self.assertIn("执行总数", html_part)
+        self.assertIn("结果详情", html_part)
+        self.assertLess(html_part.index("执行总数"), html_part.index("结果详情"))
+
+    async def test_send_email_orders_cards_with_success_first(self):
+        async with await self._new_session() as session:
+            service = NotificationService()
+            summary = CheckinSummary(
+                total=3,
+                success=1,
+                failed=1,
+                already_signed=1,
+                risk=0,
+                results=[
+                    CheckinResult(account_id=2, account_nickname="失败账号", status="failed", message="失败消息"),
+                    CheckinResult(account_id=1, account_nickname="成功账号", status="success", message="成功消息"),
+                    CheckinResult(account_id=3, account_nickname="已签账号", status="already_signed", message="今日已签到"),
+                ],
+            )
+            smtp_config = {
+                "hostname": "smtp.example.com",
+                "port": 465,
+                "username": "mailer@example.com",
+                "password": "secret",
+                "use_ssl": True,
+                "sender_name": "签到助手",
+                "sender_email": "mailer@example.com",
+            }
+
+            with patch("app.services.notifier.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+                await service._send_email("notify@example.com", summary, smtp_config)
+
+        html_part = mock_send.await_args.args[0].get_payload()[0].get_payload(decode=True).decode("utf-8")
+        self.assertLess(html_part.index("成功账号"), html_part.index("失败账号"))
+        self.assertLess(html_part.index("已签账号"), html_part.index("失败账号"))
 
     async def test_manual_execute_checkin_triggers_notification_service(self):
         async with await self._new_session() as session:

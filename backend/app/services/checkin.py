@@ -18,7 +18,6 @@ import json
 import logging
 import random
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 import httpx
@@ -40,6 +39,7 @@ from app.utils.device import (
     generate_device_id,
 )
 from app.utils.ds import generate_cn_dynamic_secret, generate_ds
+from app.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,19 @@ class CheckinService:
         self.db = db
         self.settings_service = SystemSettingsService(db)
 
+    def _build_result_context(self, account: MihoyoAccount, role: GameRole | None = None) -> dict[str, Any]:
+        """
+        为签到结果补充展示上下文。
+
+        邮件通知和结果页都需要知道“哪一个账号、哪一个游戏、哪一个角色”出了结果；
+        如果这里只有状态和消息，用户看到“签到成功/失败”时无法定位对象，排障成本会很高。
+        """
+        return {
+            "account_nickname": account.nickname or account.mihoyo_uid or f"账号#{account.id}",
+            "game_biz": role.game_biz if role else None,
+            "game_nickname": (role.nickname or role.game_uid) if role else None,
+        }
+
     async def execute_for_user(self, user_id: int) -> CheckinSummary:
         """
         为指定用户的所有账号执行签到。
@@ -122,6 +135,7 @@ class CheckinService:
                             account_id=account.id,
                             status="failed",
                             message=f"Cookie 解密失败: {exc}",
+                            **self._build_result_context(account),
                         )
                     )
                     continue
@@ -186,6 +200,7 @@ class CheckinService:
                 game_role_id=role.id,
                 status="failed",
                 message=f"不支持的签到游戏类型: {role.game_biz}",
+                **self._build_result_context(account, role),
             )
 
         called_api = False
@@ -200,11 +215,12 @@ class CheckinService:
                     status="already_signed",
                     message="今日已签到",
                     total_sign_days=info.get("total_sign_day"),
+                    **self._build_result_context(account, role),
                 )
 
             # 查询成功且确认“未签到”后再等待短延迟，避免把无意义等待扩散到失败分支。
             await self._sleep_between_info_and_sign()
-            return await self._do_sign(client, cookie, config, role, device_state)
+            return await self._do_sign(client, cookie, config, account, role, device_state)
 
         except CheckinApiError as exc:
             logger.warning("角色 %s 签到阶段失败: %s", role.game_uid, exc)
@@ -213,6 +229,7 @@ class CheckinService:
                 game_role_id=role.id,
                 status="failed",
                 message=str(exc),
+                **self._build_result_context(account, role),
             )
         except Exception as exc:
             logger.error("角色 %s 签到异常: %s", role.game_uid, exc)
@@ -221,6 +238,7 @@ class CheckinService:
                 game_role_id=role.id,
                 status="failed",
                 message=f"签到异常: {exc}",
+                **self._build_result_context(account, role),
             )
         finally:
             # 与 Starward 的处理一致：只要本角色已经调用过签到 API，就统一等待后再处理下一个角色。
@@ -257,6 +275,7 @@ class CheckinService:
         client: httpx.AsyncClient,
         cookie: str,
         config: CheckinGameConfig,
+        account: MihoyoAccount,
         role: GameRole,
         device_state: tuple[str, str],
     ) -> CheckinResult:
@@ -291,6 +310,9 @@ class CheckinService:
                 game_role_id=role.id,
                 status="already_signed",
                 message="今日已签到",
+                account_nickname=account.nickname or account.mihoyo_uid or f"账号#{account.id}",
+                game_biz=role.game_biz,
+                game_nickname=role.nickname or role.game_uid,
             )
 
         sign_data = data.get("data", {}) or {}
@@ -300,6 +322,9 @@ class CheckinService:
                 game_role_id=role.id,
                 status="risk",
                 message="签到触发风控验证，需要人工处理",
+                account_nickname=account.nickname or account.mihoyo_uid or f"账号#{account.id}",
+                game_biz=role.game_biz,
+                game_nickname=role.nickname or role.game_uid,
             )
 
         return CheckinResult(
@@ -308,6 +333,9 @@ class CheckinService:
             status="success",
             message="签到成功",
             total_sign_days=sign_data.get("total_sign_day"),
+            account_nickname=account.nickname or account.mihoyo_uid or f"账号#{account.id}",
+            game_biz=role.game_biz,
+            game_nickname=role.nickname or role.game_uid,
         )
 
     async def _ensure_device_state(self, client: httpx.AsyncClient) -> tuple[str, str]:
@@ -333,7 +361,7 @@ class CheckinService:
                 # 这里退回本地生成的占位 device_fp，至少保证任务能继续执行并把真实签到结果写入日志。
                 logger.warning("获取设备指纹失败，退回本地生成的设备指纹继续执行: %s", exc)
                 config.hyperion_device_fp = generate_device_fp()
-            config.hyperion_device_fp_updated_at = datetime.utcnow()
+            config.hyperion_device_fp_updated_at = utc_now_naive()
             changed = True
 
         if changed:
