@@ -35,7 +35,7 @@
       <div class="section-title">绑定角色</div>
       <div class="role-list">
         <div v-for="role in account.game_roles" :key="role.id" class="role-item">
-          <span class="role-game">{{ gameNames[role.game_biz] || role.game_biz }}</span>
+          <span class="role-game">{{ getGameName(role.game_biz) }}</span>
           <span class="role-name">{{ role.nickname || role.game_uid }}</span>
           <span v-if="!isCheckinSupported(role.game_biz)" class="role-unsupported">签到未适配</span>
           <span class="role-level">Lv.{{ role.level || '?' }}</span>
@@ -64,21 +64,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Refresh, RefreshRight, Delete } from '@element-plus/icons-vue'
+import { getGameName } from '../constants/game'
 
 const props = defineProps<{
   account: any
 }>()
 
 defineEmits(['maintain', 'reauth', 'delete'])
-
-const gameNames: Record<string, string> = {
-  hk4e_cn: '原神',
-  hk4e_bilibili: '原神(B服)',
-  hkrpg_cn: '星穹铁道',
-  hkrpg_bilibili: '星铁(B服)',
-  nap_cn: '绝区零',
-  bh3_cn: '崩坏3',
-}
 
 // 这里的前端支持名单必须与后端实际放开的签到能力保持一致。
 // 如果只改后端不改这里，用户会看到“明明能签却仍显示未适配”；反过来若前端先放开，

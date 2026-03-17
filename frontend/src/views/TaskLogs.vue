@@ -41,7 +41,7 @@
         <el-table-column label="账号" prop="account_nickname" :min-width="compactMode ? 110 : 140" show-overflow-tooltip />
         <el-table-column label="游戏" :min-width="compactMode ? 100 : 120">
           <template #default="{ row }">
-            {{ gameNames[row.game_biz] || row.game_biz || '-' }}
+            {{ getGameName(row.game_biz) }}
           </template>
         </el-table-column>
         <el-table-column v-if="!compactMode" label="角色" prop="game_nickname" min-width="140" show-overflow-tooltip />
@@ -88,6 +88,7 @@ import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { logApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
+import { getGameName } from '../constants/game'
 
 const logs = ref<any[]>([])
 const loading = ref(false)
@@ -104,15 +105,6 @@ const pagination = reactive({
 })
 
 const compactMode = ref(false)
-
-const gameNames: Record<string, string> = {
-  hk4e_cn: '原神',
-  hk4e_bilibili: '原神(B服)',
-  hkrpg_cn: '星穹铁道',
-  hkrpg_bilibili: '星铁(B服)',
-  nap_cn: '绝区零',
-  bh3_cn: '崩坏3',
-}
 
 function formatTime(dt: string) {
   return new Date(dt).toLocaleString('zh-CN')
