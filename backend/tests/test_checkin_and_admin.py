@@ -289,6 +289,147 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[2]["hostname"], "smtp.example.com")
         self.assertEqual(args[2]["sender_email"], "mailer@example.com")
 
+    async def test_notification_service_dedupes_identical_summary_within_window(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="user-dedupe",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="always",
+            )
+            session.add(user)
+            session.add(
+                SystemSetting(
+                    smtp_enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="mailer@example.com",
+                    smtp_password_encrypted=None,
+                    smtp_use_ssl=True,
+                    smtp_sender_name="签到助手",
+                    smtp_sender_email="mailer@example.com",
+                )
+            )
+            await session.commit()
+
+            service = NotificationService()
+            service._send_email = AsyncMock()
+            summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+            fixed_now = datetime(2026, 3, 17, 4, 0, 0, tzinfo=timezone.utc)
+
+            with patch("app.services.notifier.utc_now", return_value=fixed_now):
+                await service.send_checkin_report(user.id, summary, session, source="manual_execute")
+                await service.send_checkin_report(user.id, summary, session, source="scheduled_checkin")
+
+        service._send_email.assert_awaited_once()
+
+    async def test_notification_service_allows_same_summary_after_dedupe_window(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="user-dedupe-window",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="always",
+            )
+            session.add(user)
+            session.add(
+                SystemSetting(
+                    smtp_enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="mailer@example.com",
+                    smtp_password_encrypted=None,
+                    smtp_use_ssl=True,
+                    smtp_sender_name="签到助手",
+                    smtp_sender_email="mailer@example.com",
+                )
+            )
+            await session.commit()
+
+            service = NotificationService()
+            service._send_email = AsyncMock()
+            summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+            first_now = datetime(2026, 3, 17, 4, 0, 0, tzinfo=timezone.utc)
+            second_now = first_now + timedelta(seconds=NotificationService.DEDUPE_WINDOW_SECONDS + 1)
+
+            with patch("app.services.notifier.utc_now", side_effect=[first_now, second_now]):
+                await service.send_checkin_report(user.id, summary, session, source="manual_execute")
+                await service.send_checkin_report(user.id, summary, session, source="manual_execute")
+
+        self.assertEqual(service._send_email.await_count, 2)
+
+    async def test_notification_service_does_not_dedupe_different_summary(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="user-dedupe-different",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="always",
+            )
+            session.add(user)
+            session.add(
+                SystemSetting(
+                    smtp_enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="mailer@example.com",
+                    smtp_password_encrypted=None,
+                    smtp_use_ssl=True,
+                    smtp_sender_name="签到助手",
+                    smtp_sender_email="mailer@example.com",
+                )
+            )
+            await session.commit()
+
+            service = NotificationService()
+            service._send_email = AsyncMock()
+            success_summary = CheckinSummary(
+                total=1,
+                success=1,
+                failed=0,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="success", message="ok")],
+            )
+            failed_summary = CheckinSummary(
+                total=1,
+                success=0,
+                failed=1,
+                already_signed=0,
+                risk=0,
+                results=[CheckinResult(account_id=1, status="failed", message="boom")],
+            )
+            fixed_now = datetime(2026, 3, 17, 4, 0, 0, tzinfo=timezone.utc)
+
+            with patch("app.services.notifier.utc_now", return_value=fixed_now):
+                await service.send_checkin_report(user.id, success_summary, session, source="manual_execute")
+                await service.send_checkin_report(user.id, failed_summary, session, source="manual_execute")
+
+        self.assertEqual(service._send_email.await_count, 2)
+
     async def test_notification_service_skips_when_user_notification_disabled(self):
         async with await self._new_session() as session:
             user = User(
@@ -584,7 +725,12 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(summary, expected_summary)
         mock_checkin.execute_for_user.assert_awaited_once_with(user.id)
-        mock_send_report.assert_awaited_once_with(user.id, expected_summary, session)
+        mock_send_report.assert_awaited_once_with(
+            user.id,
+            expected_summary,
+            session,
+            source="manual_execute",
+        )
 
     async def test_list_logs_filters_and_serializes_executed_at_by_east_eight_boundary(self):
         async with await self._new_session() as session:

@@ -130,7 +130,12 @@ class SchedulerService:
 
             # 触发邮件通知
             from app.services.notifier import notification_service
-            await notification_service.send_checkin_report(user_id, summary, db)
+            await notification_service.send_checkin_report(
+                user_id,
+                summary,
+                db,
+                source="scheduled_checkin",
+            )
 
     async def _check_cookies(self):
         """

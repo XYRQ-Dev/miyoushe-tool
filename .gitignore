@@ -10,6 +10,10 @@ __pycache__/
 # Node
 node_modules/
 frontend/dist/
+# 前端构建/自动导入工具会在开发机本地生成类型声明文件。
+# 这些文件属于环境衍生产物，不应作为业务源码提交，否则不同开发机插件版本容易反复制造无意义 diff。
+frontend/auto-imports.d.ts
+frontend/components.d.ts
 
 # 数据
 data/

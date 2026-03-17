@@ -88,7 +88,12 @@ async def execute_checkin(
     # 另一条链路不发邮件，导致用户设置（通知邮箱、通知策略、SMTP）表现不一致。
     # 这里必须复用 NotificationService，而不是在接口层重新拼装“手动专用”通知规则，
     # 否则排障时会出现“定时任务会发、手动执行不发”之类的行为分叉。
-    await notification_service.send_checkin_report(current_user.id, summary, db)
+    await notification_service.send_checkin_report(
+        current_user.id,
+        summary,
+        db,
+        source="manual_execute",
+    )
     return summary
 
 

@@ -11,6 +11,8 @@
 """
 
 import logging
+import hashlib
+import json
 from datetime import date
 from email.header import Header
 from email.utils import formataddr
@@ -28,6 +30,7 @@ from app.models.user import User
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_text
 from app.schemas.task_log import CheckinSummary
+from app.utils.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +152,8 @@ EMAIL_TEMPLATE = Template("""
 class NotificationService:
     """邮件通知服务"""
 
+    DEDUPE_WINDOW_SECONDS = 300
+
     @staticmethod
     def _result_sort_key(result) -> tuple[int, str, int]:
         """
@@ -168,6 +173,64 @@ class NotificationService:
             result.account_nickname or "",
             result.account_id,
         )
+
+    def __init__(self):
+        # 进程内去重用于拦截“同一用户、同一批结果、短时间内重复发信”的场景。
+        # 当前部署以单后端容器为主，不引入数据库迁移；因此这里明确把它定位为轻量幂等保护，
+        # 不是跨实例的一致性方案。若后续改成多实例部署，需要升级为持久化去重。
+        self._recent_notifications: dict[tuple[int, str], object] = {}
+
+    def _build_summary_fingerprint(self, summary: CheckinSummary) -> str:
+        """
+        生成签到摘要指纹，用于识别“是否同一批结果”。
+
+        指纹必须基于稳定排序后的结果生成，不能依赖原始返回顺序；
+        否则同一批结果只因列表顺序不同就会被误判为两封不同邮件。
+        """
+        normalized_results = []
+        for result in sorted(summary.results, key=self._result_sort_key):
+            normalized_results.append({
+                "account_id": result.account_id,
+                "game_role_id": result.game_role_id,
+                "account_nickname": result.account_nickname or "",
+                "game_biz": result.game_biz or "",
+                "game_nickname": result.game_nickname or "",
+                "status": result.status,
+                "message": result.message or "",
+                "total_sign_days": result.total_sign_days,
+            })
+
+        payload = {
+            "total": summary.total,
+            "success": summary.success,
+            "failed": summary.failed,
+            "already_signed": summary.already_signed,
+            "risk": summary.risk,
+            "results": normalized_results,
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _purge_expired_dedupe_entries(self, now):
+        expire_before = now.timestamp() - self.DEDUPE_WINDOW_SECONDS
+        expired_keys = [
+            key
+            for key, last_sent_at in self._recent_notifications.items()
+            if last_sent_at.timestamp() <= expire_before
+        ]
+        for key in expired_keys:
+            self._recent_notifications.pop(key, None)
+
+    def _should_skip_duplicate_notification(self, user_id: int, fingerprint: str, now) -> bool:
+        self._purge_expired_dedupe_entries(now)
+        cache_key = (user_id, fingerprint)
+        last_sent_at = self._recent_notifications.get(cache_key)
+        if not last_sent_at:
+            return False
+        return (now - last_sent_at).total_seconds() <= self.DEDUPE_WINDOW_SECONDS
+
+    def _remember_notification(self, user_id: int, fingerprint: str, now):
+        self._recent_notifications[(user_id, fingerprint)] = now
 
     async def _load_smtp_config(self, db: AsyncSession) -> dict | None:
         """
@@ -207,6 +270,7 @@ class NotificationService:
         user_id: int,
         summary: CheckinSummary,
         db: AsyncSession,
+        source: str = "unknown",
     ):
         """
         发送签到报告邮件
@@ -231,15 +295,44 @@ class NotificationService:
             logger.debug(f"用户 {user_id} 设置为仅失败通知，本次全部成功，跳过")
             return
 
+        fingerprint = self._build_summary_fingerprint(summary)
+        now = utc_now()
+        if self._should_skip_duplicate_notification(user_id, fingerprint, now):
+            logger.warning(
+                "检测到重复通知，已跳过发送: user_id=%s, to=%s, source=%s, fingerprint=%s",
+                user_id,
+                user.email,
+                source,
+                fingerprint[:12],
+            )
+            return
+
         try:
+            logger.info(
+                "准备发送签到报告邮件: user_id=%s, to=%s, source=%s, fingerprint=%s",
+                user_id,
+                user.email,
+                source,
+                fingerprint[:12],
+            )
             await self._send_email(user.email, summary, smtp_config)
-            logger.info(f"签到报告邮件已发送至 {user.email}")
+            self._remember_notification(user_id, fingerprint, now)
+            logger.info(
+                "签到报告邮件已发送: user_id=%s, to=%s, source=%s, fingerprint=%s",
+                user_id,
+                user.email,
+                source,
+                fingerprint[:12],
+            )
         except Exception as e:
             # 邮件发送失败不影响签到结果
             logger.error(
-                "发送邮件失败: to=%s, from=%s, error=%s",
+                "发送邮件失败: user_id=%s, to=%s, from=%s, source=%s, fingerprint=%s, error=%s",
+                user_id,
                 user.email,
                 smtp_config.get("sender_email", ""),
+                source,
+                fingerprint[:12],
                 e,
             )
 
