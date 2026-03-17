@@ -18,10 +18,41 @@ from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
 from app.schemas.account import AccountResponse, AccountListResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
+from app.services.login_state import LoginStateService
 from app.services.qr_login import QrLoginManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/accounts", tags=["米哈游账号"])
+
+
+def _build_account_response(account: MihoyoAccount, roles: list[GameRole]) -> AccountResponse:
+    auto_refresh_available = LoginStateService.is_auto_refresh_available(account)
+    return AccountResponse(
+        id=account.id,
+        user_id=account.user_id,
+        nickname=account.nickname,
+        mihoyo_uid=account.mihoyo_uid,
+        cookie_status=account.cookie_status,
+        last_cookie_check=account.last_cookie_check,
+        last_refresh_attempt_at=account.last_refresh_attempt_at,
+        last_refresh_status=account.last_refresh_status,
+        last_refresh_message=account.last_refresh_message,
+        auto_refresh_available=auto_refresh_available,
+        reauth_notified_at=account.reauth_notified_at,
+        created_at=account.created_at,
+        game_roles=[
+            {
+                "id": r.id,
+                "game_biz": r.game_biz,
+                "game_uid": r.game_uid,
+                "nickname": r.nickname,
+                "region": r.region,
+                "level": r.level,
+                "is_enabled": r.is_enabled,
+            }
+            for r in roles
+        ],
+    )
 
 
 @router.get("", response_model=AccountListResponse)
@@ -44,27 +75,7 @@ async def list_accounts(
             select(GameRole).where(GameRole.account_id == acc.id)
         )
         roles = roles_result.scalars().all()
-        resp = AccountResponse(
-            id=acc.id,
-            user_id=acc.user_id,
-            nickname=acc.nickname,
-            mihoyo_uid=acc.mihoyo_uid,
-            cookie_status=acc.cookie_status,
-            last_cookie_check=acc.last_cookie_check,
-            created_at=acc.created_at,
-            game_roles=[
-                {
-                    "id": r.id,
-                    "game_biz": r.game_biz,
-                    "game_uid": r.game_uid,
-                    "nickname": r.nickname,
-                    "region": r.region,
-                    "level": r.level,
-                    "is_enabled": r.is_enabled,
-                }
-                for r in roles
-            ],
-        )
+        resp = _build_account_response(acc, roles)
         account_responses.append(resp)
 
     return AccountListResponse(accounts=account_responses, total=len(account_responses))
@@ -123,3 +134,30 @@ async def refresh_cookie(
         session_id=session_id,
         message="请重新扫码以刷新 Cookie",
     )
+
+
+@router.post("/{account_id}/refresh-login-state")
+async def refresh_login_state(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    手动执行一次登录态维护。
+
+    这个接口和“重新扫码登录”是两种不同语义：
+    - 这里优先尝试自动续期
+    - `/refresh-cookie` 明确表示进入重新扫码流程
+    """
+    result = await db.execute(
+        select(MihoyoAccount).where(
+            MihoyoAccount.id == account_id,
+            MihoyoAccount.user_id == current_user.id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    service = LoginStateService(db)
+    return await service.refresh_account_login_state(account)

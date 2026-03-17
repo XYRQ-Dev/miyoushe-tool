@@ -55,6 +55,7 @@ import { useUserStore } from '../stores/user'
 const props = defineProps<{
   visible: boolean
   sessionId: string
+  accountId?: number | null
 }>()
 
 const emit = defineEmits(['update:visible', 'success'])
@@ -90,7 +91,11 @@ function startLogin() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const userId = userStore.userInfo?.id || 0
-  const wsUrl = `${protocol}//${host}/ws/qr/${props.sessionId}?user_id=${userId}`
+  const query = new URLSearchParams({ user_id: String(userId) })
+  if (props.accountId) {
+    query.set('account_id', String(props.accountId))
+  }
+  const wsUrl = `${protocol}//${host}/ws/qr/${props.sessionId}?${query.toString()}`
 
   ws = new WebSocket(wsUrl)
 

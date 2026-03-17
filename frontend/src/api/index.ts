@@ -57,6 +57,7 @@ export const accountApi = {
   startQrLogin: () => api.post('/accounts/qr-login'),
   delete: (id: number) => api.delete(`/accounts/${id}`),
   refreshCookie: (id: number) => api.post(`/accounts/${id}/refresh-cookie`),
+  refreshLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
 }
 
 // ===== 任务 API =====

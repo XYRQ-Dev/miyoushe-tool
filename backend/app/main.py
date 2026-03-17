@@ -26,7 +26,9 @@ from app.services.browser import browser_manager
 from app.services.qr_login import qr_login_manager
 from app.services.scheduler import scheduler_service
 from app.services.checkin import CheckinService
+from app.services.login_state import LoginStateService
 from app.utils.crypto import encrypt_cookie
+from app.utils.timezone import utc_now_naive
 
 # 配置日志
 # 这里的 %(asctime)s 走的是进程所在系统时区，而不是 settings.APP_TIMEZONE。
@@ -94,6 +96,7 @@ async def qr_login_websocket(
     websocket: WebSocket,
     session_id: str,
     user_id: int = Query(...),
+    account_id: int | None = Query(default=None),
 ):
     """
     扫码登录 WebSocket 端点
@@ -144,14 +147,44 @@ async def qr_login_websocket(
                 if cookie_str:
                     # 保存到数据库
                     async with async_session() as db:
-                        account = MihoyoAccount(
-                            user_id=user_id,
-                            cookie_encrypted=encrypt_cookie(cookie_str),
-                            cookie_status="valid",
+                        token_info = LoginStateService.parse_login_tokens(cookie_str)
+                        if account_id is not None:
+                            account_result = await db.execute(
+                                select(MihoyoAccount).where(
+                                    MihoyoAccount.id == account_id,
+                                    MihoyoAccount.user_id == user_id,
+                                )
+                            )
+                            account = account_result.scalar_one_or_none()
+                            if account is None:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "待刷新的账号不存在",
+                                })
+                                return
+                            old_roles = await db.execute(
+                                select(GameRole).where(GameRole.account_id == account.id)
+                            )
+                            for role in old_roles.scalars().all():
+                                await db.delete(role)
+                        else:
+                            account = MihoyoAccount(user_id=user_id)
+                            db.add(account)
+                            await db.flush()
+
+                        account.cookie_encrypted = encrypt_cookie(cookie_str)
+                        account.cookie_status = "valid"
+                        account.stoken_encrypted = (
+                            encrypt_cookie(token_info["stoken"]) if token_info["stoken"] else None
                         )
-                        db.add(account)
-                        await db.commit()
-                        await db.refresh(account)
+                        account.stuid = token_info["stuid"]
+                        account.mid = token_info["mid"]
+                        account.last_cookie_check = utc_now_naive()
+                        account.cookie_token_updated_at = utc_now_naive()
+                        account.last_refresh_status = "success"
+                        account.last_refresh_message = "登录成功并已更新登录态维护凭据"
+                        account.last_refresh_attempt_at = utc_now_naive()
+                        account.reauth_notified_at = None
 
                         # 获取并保存游戏角色
                         checkin_service = CheckinService(db)
@@ -173,6 +206,7 @@ async def qr_login_websocket(
                             account.mihoyo_uid = roles[0].get("game_uid", "")
 
                         await db.commit()
+                        await db.refresh(account)
 
                     await websocket.send_json({
                         "type": "success",

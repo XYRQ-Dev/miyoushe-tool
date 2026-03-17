@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import MihoyoAccount, GameRole
 from app.models.task_log import TaskLog
 from app.schemas.task_log import CheckinResult, CheckinSummary
+from app.services.login_state import LoginStateService
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_cookie
 from app.utils.device import (
@@ -147,17 +148,56 @@ class CheckinService:
         result = await self.db.execute(
             select(MihoyoAccount).where(
                 MihoyoAccount.user_id == user_id,
-                MihoyoAccount.cookie_status == "valid",
+                MihoyoAccount.cookie_encrypted.is_not(None),
             )
         )
         accounts = result.scalars().all()
 
         all_results: list[CheckinResult] = []
+        login_state_service = LoginStateService(self.db)
 
         async with httpx.AsyncClient(timeout=30) as client:
             device_state = await self._ensure_device_state(client)
 
             for account in accounts:
+                roles_result = await self.db.execute(
+                    select(GameRole).where(
+                        GameRole.account_id == account.id,
+                        GameRole.is_enabled.is_(True),
+                        GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
+                    )
+                )
+                roles = roles_result.scalars().all()
+
+                if not roles:
+                    logger.info("账号 %s 没有已启用且已适配签到的游戏角色，跳过", account.id)
+                    continue
+
+                if account.cookie_status != "valid":
+                    login_state = await login_state_service.refresh_account_login_state(account)
+                    if login_state["cookie_status"] != "valid":
+                        for role in roles:
+                            all_results.append(
+                                CheckinResult(
+                                    account_id=account.id,
+                                    game_role_id=role.id,
+                                    status="failed",
+                                    message=login_state["message"],
+                                    **self._build_result_context(account, role),
+                                )
+                            )
+                            self.db.add(
+                                TaskLog(
+                                    account_id=account.id,
+                                    game_role_id=role.id,
+                                    task_type="checkin",
+                                    status="failed",
+                                    message=login_state["message"],
+                                )
+                            )
+                        await self.db.commit()
+                        continue
+
                 try:
                     cookie = decrypt_cookie(account.cookie_encrypted)
                 except Exception as exc:
@@ -170,19 +210,6 @@ class CheckinService:
                             **self._build_result_context(account),
                         )
                     )
-                    continue
-
-                roles_result = await self.db.execute(
-                    select(GameRole).where(
-                        GameRole.account_id == account.id,
-                        GameRole.is_enabled.is_(True),
-                        GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
-                    )
-                )
-                roles = roles_result.scalars().all()
-
-                if not roles:
-                    logger.info("账号 %s 没有已启用且已适配签到的游戏角色，跳过", account.id)
                     continue
 
                 for role in roles:

@@ -21,7 +21,8 @@
         v-for="account in accounts"
         :key="account.id"
         :account="account"
-        @refresh="handleRefreshCookie(account)"
+        @maintain="handleMaintainLoginState(account)"
+        @reauth="handleRefreshCookie(account)"
         @delete="handleDelete(account)"
       />
     </div>
@@ -30,6 +31,7 @@
     <QrLoginDialog
       v-model:visible="qrDialogVisible"
       :session-id="currentSessionId"
+      :account-id="currentRefreshAccountId"
       @success="onLoginSuccess"
     />
   </div>
@@ -47,6 +49,7 @@ const accounts = ref<any[]>([])
 const loading = ref(false)
 const qrDialogVisible = ref(false)
 const currentSessionId = ref('')
+const currentRefreshAccountId = ref<number | null>(null)
 
 async function loadAccounts() {
   loading.value = true
@@ -61,6 +64,7 @@ async function loadAccounts() {
 async function handleAddAccount() {
   try {
     const { data } = await accountApi.startQrLogin()
+    currentRefreshAccountId.value = null
     currentSessionId.value = data.session_id
     qrDialogVisible.value = true
   } catch (e) {
@@ -71,8 +75,20 @@ async function handleAddAccount() {
 async function handleRefreshCookie(account: any) {
   try {
     const { data } = await accountApi.refreshCookie(account.id)
+    currentRefreshAccountId.value = account.id
     currentSessionId.value = data.session_id
     qrDialogVisible.value = true
+  } catch (e) {
+    // 错误已在拦截器中处理
+  }
+}
+
+async function handleMaintainLoginState(account: any) {
+  try {
+    const { data } = await accountApi.refreshLoginState(account.id)
+    const updatedMessage = data.message || data.last_refresh_message || '登录态维护已完成'
+    ElMessage.success(updatedMessage)
+    await loadAccounts()
   } catch (e) {
     // 错误已在拦截器中处理
   }
@@ -96,9 +112,11 @@ async function handleDelete(account: any) {
 }
 
 function onLoginSuccess() {
+  const refreshedExistingAccount = currentRefreshAccountId.value !== null
   qrDialogVisible.value = false
+  currentRefreshAccountId.value = null
   loadAccounts()
-  ElMessage.success('账号绑定成功')
+  ElMessage.success(refreshedExistingAccount ? '账号登录态已更新' : '账号绑定成功')
 }
 
 onMounted(loadAccounts)

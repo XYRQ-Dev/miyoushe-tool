@@ -19,9 +19,19 @@ class MihoyoAccount(Base):
     mihoyo_uid = Column(String(50), nullable=True)
     # Cookie 使用 AES-256 加密存储，绝不明文落库
     cookie_encrypted = Column(Text, nullable=True)
+    # 自动续期所需的 stoken 同样属于高敏感凭据，必须与 Cookie 一样加密存储。
+    # 若后续有人为了“方便排障”改成明文，等价于把整套登录态维护入口直接暴露到数据库层。
+    stoken_encrypted = Column(Text, nullable=True)
+    stuid = Column(String(50), nullable=True)
+    mid = Column(String(100), nullable=True)
     # Cookie 状态：valid / expired / unknown
     cookie_status = Column(String(20), default="valid")
     last_cookie_check = Column(DateTime, nullable=True)
+    cookie_token_updated_at = Column(DateTime, nullable=True)
+    last_refresh_attempt_at = Column(DateTime, nullable=True)
+    last_refresh_status = Column(String(30), nullable=True)
+    last_refresh_message = Column(Text, nullable=True)
+    reauth_notified_at = Column(DateTime, nullable=True)
     # 当前模型字段仍以“无时区 UTC”存库；若直接继续引用 datetime.utcnow，
     # Python 3.12+ 会产生弃用告警，且容易让后续维护者误以为这里是推荐写法。
     created_at = Column(DateTime, default=utc_now_naive)

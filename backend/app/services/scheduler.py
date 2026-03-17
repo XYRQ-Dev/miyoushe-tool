@@ -17,7 +17,7 @@ from app.models.user import User
 from app.models.account import MihoyoAccount
 from app.models.task_log import TaskConfig
 from app.services.checkin import CheckinService
-from app.utils.timezone import utc_now_naive
+from app.services.login_state import LoginStateService
 
 logger = logging.getLogger(__name__)
 
@@ -139,27 +139,25 @@ class SchedulerService:
 
     async def _check_cookies(self):
         """
-        检测所有账号的 Cookie 是否过期
-        通过调用米游社 API 验证 Cookie 有效性
+        检测并维护所有账号的登录态。
+
+        这里只做统一调度入口，不再把“过期检测”和“自动续期”拆成两套逻辑，
+        否则账号页、定时任务和签到前置检查很容易看到彼此矛盾的状态。
         """
-        logger.info("开始检测 Cookie 有效性...")
+        logger.info("开始检测并维护账号登录态...")
 
         async with async_session() as db:
             result = await db.execute(
-                select(MihoyoAccount).where(MihoyoAccount.cookie_status == "valid")
+                select(MihoyoAccount).where(MihoyoAccount.cookie_encrypted.is_not(None))
             )
             accounts = result.scalars().all()
 
-            from app.services.cookie import CookieService
-            cookie_service = CookieService(db)
+            login_state_service = LoginStateService(db)
 
             for account in accounts:
-                is_valid = await cookie_service.verify_cookie(account)
-                account.cookie_status = "valid" if is_valid else "expired"
-                account.last_cookie_check = utc_now_naive()
+                await login_state_service.refresh_account_login_state(account)
 
-            await db.commit()
-            logger.info(f"Cookie 检测完成，共检测 {len(accounts)} 个账号")
+            logger.info(f"登录态维护完成，共处理 {len(accounts)} 个账号")
 
     def stop(self):
         """停止调度器"""

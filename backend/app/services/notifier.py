@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.account import MihoyoAccount
 from app.models.user import User
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_text
@@ -141,6 +142,59 @@ EMAIL_TEMPLATE = Template("""
             </table>
         </div>
         {% endfor %}
+    </div>
+    <div class="footer">此邮件由米游社自动签到系统发送</div>
+</div>
+</body>
+</html>
+""")
+
+LOGIN_STATE_EMAIL_TEMPLATE = Template("""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f5f9; margin: 0; padding: 12px; color: #1f2937; }
+    .container { max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 18px; overflow: hidden; box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08); }
+    .header { background: linear-gradient(160deg, #f97316 0%, #dc2626 100%); color: #ffffff; padding: 24px 20px 18px; }
+    .header h1 { margin: 0; font-size: 22px; line-height: 1.3; }
+    .header p { margin: 8px 0 0; font-size: 13px; opacity: 0.92; }
+    .content { padding: 18px 16px; }
+    .alert { background: #fff7ed; border: 1px solid #fdba74; border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+    .alert .title { font-size: 15px; font-weight: 700; color: #9a3412; margin-bottom: 6px; }
+    .alert .desc { font-size: 13px; color: #7c2d12; line-height: 1.6; }
+    .meta { border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px; background: #ffffff; }
+    .meta-row { display: flex; gap: 12px; padding: 6px 0; font-size: 13px; }
+    .meta-label { width: 80px; color: #6b7280; flex-shrink: 0; }
+    .meta-value { color: #111827; word-break: break-word; }
+    .action { margin-top: 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 14px; padding: 14px; }
+    .action .title { font-size: 14px; font-weight: 700; color: #1d4ed8; margin-bottom: 6px; }
+    .action .desc { font-size: 13px; color: #1e3a8a; line-height: 1.6; }
+    .footer { padding: 14px 16px 18px; text-align: center; color: #9ca3af; font-size: 12px; border-top: 1px solid #edf2f7; background: #fcfcfd; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>米游社账号需要重新登录</h1>
+        <p>{{ today }}</p>
+    </div>
+    <div class="content">
+        <div class="alert">
+            <div class="title">自动续期已失效</div>
+            <div class="desc">系统已经尝试自动恢复该账号的登录态，但当前续期凭据不可用。为避免后续签到持续失败，请尽快在账号中心重新扫码。</div>
+        </div>
+        <div class="meta">
+            <div class="meta-row"><div class="meta-label">账号</div><div class="meta-value">{{ account_name }}</div></div>
+            <div class="meta-row"><div class="meta-label">米游社 UID</div><div class="meta-value">{{ account_uid }}</div></div>
+            <div class="meta-row"><div class="meta-label">当前状态</div><div class="meta-value">需要重新扫码</div></div>
+            <div class="meta-row"><div class="meta-label">原因</div><div class="meta-value">{{ message }}</div></div>
+        </div>
+        <div class="action">
+            <div class="title">建议操作</div>
+            <div class="desc">打开账号中心，找到该账号后点击“重新扫码登录”，重新完成一次米游社扫码即可恢复自动签到与登录态维护。</div>
+        </div>
     </div>
     <div class="footer">此邮件由米游社自动签到系统发送</div>
 </div>
@@ -336,6 +390,44 @@ class NotificationService:
                 e,
             )
 
+    async def send_reauth_required_notification(
+        self,
+        user_id: int,
+        account: MihoyoAccount,
+        db: AsyncSession,
+    ) -> bool:
+        """
+        发送“账号需要重新扫码”的登录态告警邮件。
+
+        这类通知只在账号明确失去自动续期能力时发送，不能和普通签到失败共用同一模板；
+        否则用户看到的仍会是“某次签到失败”，无法意识到后续所有定时任务都会继续失败。
+        """
+        if account.reauth_notified_at:
+            return False
+
+        smtp_config = await self._load_smtp_config(db)
+        if not smtp_config:
+            return False
+
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user or not user.email or not user.email_notify:
+            return False
+
+        try:
+            await self._send_login_state_email(user.email, account, smtp_config)
+            account.reauth_notified_at = utc_now().replace(tzinfo=None)
+            return True
+        except Exception as exc:
+            logger.error(
+                "发送登录态失效通知失败: user_id=%s, account_id=%s, to=%s, error=%s",
+                user_id,
+                account.id,
+                user.email,
+                exc,
+            )
+            return False
+
     async def _send_email(self, to_email: str, summary: CheckinSummary, smtp_config: dict):
         """通过 SMTP 发送 HTML 邮件"""
         today = date.today().isoformat()
@@ -373,6 +465,42 @@ class NotificationService:
             "password": smtp_config["password"],
         }
 
+        if smtp_config["use_ssl"]:
+            kwargs["use_tls"] = True
+        else:
+            kwargs["start_tls"] = True
+
+        await aiosmtplib.send(msg, **kwargs)
+
+    async def _send_login_state_email(self, to_email: str, account: MihoyoAccount, smtp_config: dict):
+        """发送登录态失效通知邮件。"""
+        today = date.today().isoformat()
+        subject = f"[米游社登录态] 账号需要重新扫码 - {today}"
+        html_content = LOGIN_STATE_EMAIL_TEMPLATE.render(
+            today=today,
+            account_name=account.nickname or f"账号#{account.id}",
+            account_uid=account.mihoyo_uid or "-",
+            message=account.last_refresh_message or "自动续期凭据已失效",
+        )
+
+        msg = MIMEMultipart("alternative")
+        sender_name = smtp_config.get("sender_name", "").strip()
+        sender_email = smtp_config["sender_email"]
+        msg["From"] = (
+            formataddr((str(Header(sender_name, "utf-8")), sender_email))
+            if sender_name
+            else sender_email
+        )
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        kwargs = {
+            "hostname": smtp_config["hostname"],
+            "port": smtp_config["port"],
+            "username": smtp_config["username"],
+            "password": smtp_config["password"],
+        }
         if smtp_config["use_ssl"]:
             kwargs["use_tls"] = True
         else:

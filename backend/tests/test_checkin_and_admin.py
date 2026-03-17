@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.api.admin import get_email_settings, update_email_settings
+from app.api.accounts import list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
 from app.api.tasks import execute_checkin, get_today_status
-from app.database import Base
+from app.database import Base, ensure_account_columns
 from app.models.account import GameRole, MihoyoAccount
 from app.models.system_setting import SystemSetting
 from app.models.task_log import TaskLog
@@ -19,9 +20,10 @@ from app.models.user import User
 from app.schemas.system_setting import AdminEmailSettingsUpdate
 from app.schemas.task_log import CheckinSummary, CheckinResult
 from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
+from app.services.login_state import LoginStateService
 from app.services.notifier import NotificationService
 from app.utils.timezone import utc_now, utc_now_naive
-from app.utils.crypto import decrypt_text
+from app.utils.crypto import decrypt_text, encrypt_text
 from app.utils.device import HYPERION_APP_VERSION
 
 
@@ -428,6 +430,222 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             read_back = await get_email_settings(admin=admin, db=session)
             self.assertTrue(read_back.smtp_password_configured)
             self.assertEqual(read_back.smtp_user, "mailer@example.com")
+
+    async def test_refresh_account_login_state_restores_valid_status_after_auto_refresh(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(
+                user_id=1,
+                cookie_encrypted="encrypted-cookie",
+                cookie_status="expired",
+                stoken_encrypted=encrypt_text("v2_test_stoken"),
+                stuid="123456789",
+                mid="mid-123",
+            )
+            session.add(account)
+            await session.commit()
+
+            service = LoginStateService(session)
+            service.verify_cookie = AsyncMock(side_effect=[
+                {"state": "expired", "message": "Cookie 已过期"},
+                {"state": "valid", "message": "登录态有效"},
+            ])
+            service.refresh_cookie_token = AsyncMock(return_value={
+                "success": True,
+                "message": "自动续期成功",
+                "cookie": "ltuid=1; cookie_token=new-token",
+            })
+
+            with patch("app.services.login_state.notification_service.send_reauth_required_notification", new_callable=AsyncMock) as mock_notify:
+                result = await service.refresh_account_login_state(account)
+
+        self.assertEqual(result["cookie_status"], "valid")
+        self.assertEqual(account.cookie_status, "valid")
+        self.assertEqual(account.last_refresh_status, "success")
+        self.assertIn("自动续期成功", account.last_refresh_message)
+        self.assertIsNotNone(account.cookie_token_updated_at)
+        mock_notify.assert_not_awaited()
+
+    async def test_refresh_account_login_state_marks_reauth_required_and_notifies_once(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="reauth-user",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="always",
+            )
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(
+                user_id=user.id,
+                cookie_encrypted="encrypted-cookie",
+                cookie_status="expired",
+                stoken_encrypted=encrypt_text("v2_test_stoken"),
+                stuid="123456789",
+                mid="mid-123",
+            )
+            session.add(account)
+            await session.commit()
+
+            service = LoginStateService(session)
+            service.verify_cookie = AsyncMock(return_value={"state": "expired", "message": "Cookie 已过期"})
+            service.refresh_cookie_token = AsyncMock(return_value={
+                "success": False,
+                "state": "reauth_required",
+                "message": "续期凭据已失效，需要重新扫码",
+            })
+
+            with patch("app.services.login_state.notification_service.send_reauth_required_notification", new_callable=AsyncMock) as mock_notify:
+                first = await service.refresh_account_login_state(account)
+                second = await service.refresh_account_login_state(account)
+
+        self.assertEqual(first["cookie_status"], "reauth_required")
+        self.assertEqual(second["cookie_status"], "reauth_required")
+        self.assertEqual(account.cookie_status, "reauth_required")
+        self.assertEqual(mock_notify.await_count, 1)
+        self.assertIsNotNone(account.reauth_notified_at)
+
+    async def test_list_accounts_exposes_login_state_fields(self):
+        async with await self._new_session() as session:
+            user = User(username="account-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(
+                user_id=user.id,
+                nickname="测试账号",
+                mihoyo_uid="10001",
+                cookie_encrypted="encrypted-cookie",
+                cookie_status="reauth_required",
+                stoken_encrypted=encrypt_text("v2_test_stoken"),
+                stuid="123456789",
+                mid="mid-123",
+                last_refresh_status="reauth_required",
+                last_refresh_message="续期凭据已失效，需要重新扫码",
+            )
+            session.add(account)
+            await session.commit()
+
+            response = await list_accounts(current_user=user, db=session)
+
+        self.assertEqual(response.total, 1)
+        self.assertTrue(response.accounts[0].auto_refresh_available)
+        self.assertEqual(response.accounts[0].last_refresh_status, "reauth_required")
+        self.assertEqual(response.accounts[0].last_refresh_message, "续期凭据已失效，需要重新扫码")
+
+    async def test_refresh_login_state_endpoint_returns_updated_status(self):
+        async with await self._new_session() as session:
+            user = User(username="refresh-endpoint-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(
+                user_id=user.id,
+                cookie_encrypted="encrypted-cookie",
+                cookie_status="expired",
+            )
+            session.add(account)
+            await session.commit()
+
+            with patch("app.api.accounts.LoginStateService") as mock_service_cls:
+                mock_service = mock_service_cls.return_value
+                mock_service.refresh_account_login_state = AsyncMock(return_value={
+                    "account_id": account.id,
+                    "cookie_status": "reauth_required",
+                    "message": "续期凭据已失效，需要重新扫码",
+                    "auto_refresh_available": False,
+                })
+
+                response = await refresh_login_state(account.id, current_user=user, db=session)
+
+        self.assertEqual(response["cookie_status"], "reauth_required")
+        self.assertFalse(response["auto_refresh_available"])
+
+    async def test_notification_service_sends_reauth_required_email_once_until_recovered(self):
+        async with await self._new_session() as session:
+            user = User(
+                username="reauth-mail-user",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="notify@example.com",
+                email_notify=True,
+                notify_on="always",
+            )
+            session.add(user)
+            session.add(
+                SystemSetting(
+                    smtp_enabled=True,
+                    smtp_host="smtp.example.com",
+                    smtp_port=465,
+                    smtp_user="mailer@example.com",
+                    smtp_password_encrypted=None,
+                    smtp_use_ssl=True,
+                    smtp_sender_name="签到助手",
+                    smtp_sender_email="mailer@example.com",
+                )
+            )
+            await session.flush()
+
+            account = MihoyoAccount(
+                user_id=user.id,
+                nickname="测试账号",
+                mihoyo_uid="10001",
+                cookie_encrypted="encrypted-cookie",
+                cookie_status="reauth_required",
+            )
+            session.add(account)
+            await session.commit()
+
+            service = NotificationService()
+            service._send_login_state_email = AsyncMock()
+
+            await service.send_reauth_required_notification(user.id, account, session)
+            await service.send_reauth_required_notification(user.id, account, session)
+
+            account.cookie_status = "valid"
+            account.reauth_notified_at = None
+            await session.commit()
+            await service.send_reauth_required_notification(user.id, account, session)
+
+        self.assertEqual(service._send_login_state_email.await_count, 2)
+
+    async def test_ensure_account_columns_adds_login_state_fields_for_legacy_database(self):
+        legacy_engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        async with legacy_engine.begin() as conn:
+            await conn.exec_driver_sql(
+                """
+                CREATE TABLE mihoyo_accounts (
+                    id INTEGER PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    nickname VARCHAR(100),
+                    mihoyo_uid VARCHAR(50),
+                    cookie_encrypted TEXT,
+                    cookie_status VARCHAR(20),
+                    last_cookie_check DATETIME,
+                    created_at DATETIME
+                )
+                """
+            )
+
+        await ensure_account_columns(legacy_engine)
+
+        async with legacy_engine.begin() as conn:
+            result = await conn.exec_driver_sql("PRAGMA table_info(mihoyo_accounts)")
+            columns = {row[1] for row in result.fetchall()}
+
+        await legacy_engine.dispose()
+
+        self.assertIn("stoken_encrypted", columns)
+        self.assertIn("last_refresh_status", columns)
+        self.assertIn("reauth_notified_at", columns)
 
     async def test_notification_service_prefers_database_smtp_config(self):
         async with await self._new_session() as session:
