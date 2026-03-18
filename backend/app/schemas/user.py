@@ -24,6 +24,7 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
+    visible_menu_keys: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

@@ -86,6 +86,14 @@ export const adminApi = {
   listUsers: () => api.get('/admin/users'),
   toggleUser: (id: number) => api.put(`/admin/users/${id}/toggle-active`),
   getStats: () => api.get('/admin/stats'),
+  getMenuVisibility: () => api.get('/admin/menu-visibility'),
+  updateMenuVisibility: (data: {
+    items: Array<{
+      key: string
+      user_visible: boolean
+      admin_visible: boolean
+    }>
+  }) => api.put('/admin/menu-visibility', data),
   getEmailSettings: () => api.get('/admin/system-settings/email'),
   updateEmailSettings: (data: {
     smtp_enabled: boolean

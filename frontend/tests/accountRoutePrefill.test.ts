@@ -10,6 +10,12 @@ import {
   getNoteStatusText,
   getNoteStatusType,
 } from '../src/utils/noteStatus.ts'
+import {
+  getMenuDenyTarget,
+  getVisibleMenus,
+  hasMenuAccess,
+} from '../src/utils/menuVisibility.ts'
+import { APP_MENUS } from '../src/constants/appMenus.ts'
 
 const firstLoad = resolveRouteAccountPrefill('12', {
   consumed: false,
@@ -76,6 +82,15 @@ assert.equal(getNoteStatusText('verification_required'), '需验证')
 assert.equal(getNoteStatusType('verification_required'), 'warning')
 assert.equal(getNoteNoticeTone('verification_required'), 'warning')
 assert.equal(getNoteNoticeTone('error'), 'error')
+assert.equal(APP_MENUS.some((item) => item.key === 'admin_menu_management'), true)
+assert.deepEqual(
+  getVisibleMenus(['dashboard', 'settings']).map((item) => item.key),
+  ['dashboard', 'settings'],
+)
+assert.equal(hasMenuAccess('gacha', ['dashboard', 'settings']), false)
+assert.equal(hasMenuAccess('gacha', ['dashboard', 'gacha']), true)
+assert.equal(getMenuDenyTarget(false), '/')
+assert.equal(getMenuDenyTarget(true), '/admin/menus')
 
 const plainHeaderConfig = applyAuthorizationHeader({ headers: {} }, 'plain-token')
 assert.equal(plainHeaderConfig.headers.Authorization, 'Bearer plain-token')
@@ -118,6 +133,21 @@ assert.equal(
   true,
   '路由守卫应在鉴权判断前恢复用户信息，避免刷新管理员页时被误判',
 )
+assert.equal(
+  routerSource.includes("path: 'admin/menus'"),
+  true,
+  '路由表应新增管理员菜单管理页面',
+)
+assert.equal(
+  routerSource.includes("menuKey: 'admin_menu_management'"),
+  true,
+  '路由元信息应包含菜单 key，供菜单守卫统一判断可见性与可访问性',
+)
+assert.equal(
+  routerSource.includes('hasMenuAccess('),
+  true,
+  '路由守卫应通过统一菜单访问工具判断隐藏菜单的直接访问行为',
+)
 
 const settingsView = fs.readFileSync(
   path.resolve(import.meta.dirname, '../src/views/Settings.vue'),
@@ -142,6 +172,31 @@ assert.equal(
   dashboardView.includes('getNoteNoticeTone(card.status)'),
   true,
   'Dashboard.vue 应通过统一状态工具计算 notice 语义，避免模板内散落状态分支',
+)
+
+const layoutView = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../src/views/Layout.vue'),
+  'utf8',
+)
+assert.equal(
+  layoutView.includes('visibleMenus'),
+  true,
+  'Layout.vue 应改为根据后端下发菜单 key 过滤侧边栏菜单',
+)
+assert.equal(
+  layoutView.includes('APP_MENUS'),
+  true,
+  'Layout.vue 应复用统一菜单目录，避免侧边栏与路由维护两份菜单定义',
+)
+
+const adminMenusView = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../src/views/AdminMenuManagement.vue'),
+  'utf8',
+)
+assert.equal(
+  adminMenusView.includes('隐藏后将同时禁止该用户类型直接访问页面'),
+  true,
+  '菜单管理页应明确告知隐藏菜单会同时禁用直接访问，避免管理员误解行为语义',
 )
 
 console.log('accountRoutePrefill tests passed')

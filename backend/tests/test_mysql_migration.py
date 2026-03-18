@@ -121,6 +121,7 @@ class MySqlMigrationTests(unittest.IsolatedAsyncioTestCase):
                     smtp_sender_email="mailer@example.com",
                     smtp_sender_name="米游社工具",
                     smtp_use_ssl=True,
+                    menu_visibility_json='{"gacha":{"user":false,"admin":true}}',
                     updated_at=utc_now_naive(),
                 )
                 session.add_all([role, task_config, setting])
@@ -236,7 +237,9 @@ class MySqlMigrationTests(unittest.IsolatedAsyncioTestCase):
 
                 migrated_log = (await session.execute(select(TaskLog))).scalar_one()
                 migrated_role = (await session.execute(select(GameRole))).scalar_one()
+                migrated_setting = (await session.execute(select(SystemSetting))).scalar_one()
                 self.assertEqual(migrated_log.game_role_id, migrated_role.id)
+                self.assertEqual(migrated_setting.menu_visibility_json, '{"gacha":{"user":false,"admin":true}}')
 
             await target_engine.dispose()
             await source_engine.dispose()

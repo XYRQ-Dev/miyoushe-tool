@@ -11,7 +11,7 @@
 - 后续若继续扩展系统级配置，也能保持入口一致
 """
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 from app.database import Base
 from app.utils.timezone import utc_now_naive
@@ -31,6 +31,11 @@ class SystemSetting(Base):
     smtp_use_ssl = Column(Boolean, default=True)
     smtp_sender_name = Column(String(255), nullable=True)
     smtp_sender_email = Column(String(255), nullable=True)
+
+    # 菜单可见性是系统级全局配置：管理员维护后，所有登录态都需要按同一套策略渲染与拦截。
+    # 这里保存 JSON 文本而不是拆成多行配置，是为了让“菜单目录默认值 + 旧库补列 + MySQL 迁移”
+    # 都保持简单一致；如果误改成自由格式文本，前端路由守卫就会在运行期失去稳定输入。
+    menu_visibility_json = Column(Text, nullable=True)
 
     # 设备标识必须稳定复用。若每次签到都随机生成，容易造成“参数看起来齐全但依然高频风控”的假象。
     hyperion_device_id = Column(String(64), nullable=True)

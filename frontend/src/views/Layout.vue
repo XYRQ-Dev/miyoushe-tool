@@ -21,41 +21,9 @@
         text-color="rgba(255,255,255,0.7)"
         active-text-color="#fff"
       >
-        <el-menu-item index="/">
-          <el-icon><Odometer /></el-icon>
-          <template #title>仪表盘</template>
-        </el-menu-item>
-        <el-menu-item index="/accounts">
-          <el-icon><User /></el-icon>
-          <template #title>账号管理</template>
-        </el-menu-item>
-        <el-menu-item index="/logs">
-          <el-icon><Document /></el-icon>
-          <template #title>签到日志</template>
-        </el-menu-item>
-        <el-menu-item index="/gacha">
-          <el-icon><Collection /></el-icon>
-          <template #title>抽卡记录</template>
-        </el-menu-item>
-        <el-menu-item index="/assets">
-          <el-icon><Collection /></el-icon>
-          <template #title>角色资产</template>
-        </el-menu-item>
-        <el-menu-item index="/health">
-          <el-icon><Warning /></el-icon>
-          <template #title>账号健康中心</template>
-        </el-menu-item>
-        <el-menu-item index="/redeem">
-          <el-icon><Ticket /></el-icon>
-          <template #title>兑换码中心</template>
-        </el-menu-item>
-        <el-menu-item v-if="userStore.isAdmin" index="/admin/users">
-          <el-icon><UserFilled /></el-icon>
-          <template #title>用户信息列表</template>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon>
-          <template #title>系统设置</template>
+        <el-menu-item v-for="menu in visibleMenus" :key="menu.key" :index="menu.path">
+          <el-icon><component :is="menuIconMap[menu.key]" /></el-icon>
+          <template #title>{{ menu.label }}</template>
         </el-menu-item>
       </el-menu>
 
@@ -93,7 +61,7 @@
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="router.push('/settings')">
+                <el-dropdown-item v-if="settingsVisible" @click="router.push('/settings')">
                   <el-icon><Setting /></el-icon>设置
                 </el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">
@@ -125,27 +93,33 @@ import {
   Expand, Fold, ArrowDown, SwitchButton, Sunny, Moon, Ticket, Warning,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
+import { APP_MENUS, type AppMenuKey } from '../constants/appMenus'
+import { getVisibleMenus, hasMenuAccess } from '../utils/menuVisibility'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 const isCollapse = ref(false)
+const menuIconMap: Record<AppMenuKey, unknown> = {
+  dashboard: Odometer,
+  accounts: User,
+  logs: Document,
+  gacha: Collection,
+  assets: Collection,
+  health: Warning,
+  redeem: Ticket,
+  settings: Setting,
+  admin_users: UserFilled,
+  admin_menu_management: Setting,
+}
 
 const activeMenu = computed(() => route.path)
+const visibleMenus = computed(() => getVisibleMenus(userStore.visibleMenuKeys))
+const settingsVisible = computed(() => hasMenuAccess('settings', userStore.visibleMenuKeys))
 
 const pageTitle = computed(() => {
-  const map: Record<string, string> = {
-    '/': '仪表盘',
-    '/accounts': '账号管理',
-    '/logs': '签到日志',
-    '/admin/users': '用户信息列表',
-    '/gacha': '抽卡记录',
-    '/assets': '角色资产',
-    '/health': '账号健康中心',
-    '/redeem': '兑换码中心',
-    '/settings': '系统设置',
-  }
-  return map[route.path] || '米游社签到'
+  const matchedMenu = APP_MENUS.find((item) => item.path === route.path)
+  return matchedMenu?.label || '米游社签到'
 })
 
 function handleLogout() {

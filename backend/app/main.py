@@ -28,6 +28,7 @@ from app.services.scheduler import scheduler_service
 from app.services.checkin import CheckinService
 from app.services.account_role_sync import sync_account_roles
 from app.services.login_state import LoginStateService
+from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import encrypt_cookie
 from app.utils.timezone import utc_now_naive
 
@@ -49,6 +50,14 @@ async def lifespan(app: FastAPI):
     logger.info("正在初始化数据库...")
     await init_db()
     logger.info("数据库初始化完成")
+
+    logger.info("正在准备系统配置存储结构...")
+    async with async_session() as db:
+        # 登录态恢复、菜单守卫、签到配置都会读取 system_settings。
+        # 若把旧库补表补列继续留在这些高频路径里，每次 `/auth/me` 都会触发 schema inspect；
+        # 因此这里在启动阶段先做一次结构准备，把兼容成本收敛到冷启动。
+        await SystemSettingsService(db).ensure_storage_ready()
+    logger.info("系统配置存储结构准备完成")
 
     logger.info("正在启动任务调度器...")
     await scheduler_service.start()

@@ -14,6 +14,7 @@ export interface UserInfo {
   notify_on: string
   role: string
   is_active: boolean
+  visible_menu_keys: string[]
 }
 
 export const useUserStore = defineStore('user', () => {
@@ -24,6 +25,7 @@ export const useUserStore = defineStore('user', () => {
 
   const isLoggedIn = computed(() => !!localStorage.getItem('access_token'))
   const isAdmin = computed(() => userInfo.value?.role === 'admin')
+  const visibleMenuKeys = computed(() => userInfo.value?.visible_menu_keys || [])
 
   async function login(username: string, password: string) {
     const { data } = await authApi.login({ username, password })
@@ -111,6 +113,7 @@ export const useUserStore = defineStore('user', () => {
     darkMode,
     isLoggedIn,
     isAdmin,
+    visibleMenuKeys,
     login,
     register,
     fetchUserInfo,

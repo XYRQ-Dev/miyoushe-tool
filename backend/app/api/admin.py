@@ -14,7 +14,12 @@ from app.database import get_db
 from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
 from app.models.task_log import TaskLog
-from app.schemas.system_setting import AdminEmailSettingsResponse, AdminEmailSettingsUpdate
+from app.schemas.system_setting import (
+    AdminEmailSettingsResponse,
+    AdminEmailSettingsUpdate,
+    AdminMenuVisibilityResponse,
+    AdminMenuVisibilityUpdate,
+)
 from app.schemas.user import UserResponse
 from app.api.auth import require_admin
 from app.services.system_settings import SystemSettingsService
@@ -137,3 +142,25 @@ async def update_email_settings(
         smtp_sender_email=config.smtp_sender_email or "",
         smtp_password_configured=bool(config.smtp_password_encrypted),
     )
+
+
+@router.get("/menu-visibility", response_model=AdminMenuVisibilityResponse)
+async def get_menu_visibility(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    del admin
+    return await SystemSettingsService(db).get_menu_visibility()
+
+
+@router.put("/menu-visibility", response_model=AdminMenuVisibilityResponse)
+async def update_menu_visibility(
+    payload: AdminMenuVisibilityUpdate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    del admin
+    try:
+        return await SystemSettingsService(db).update_menu_visibility(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

@@ -8,12 +8,17 @@ from unittest.mock import AsyncMock, patch
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.api.auth import register
-from app.api.admin import get_email_settings, update_email_settings
+from app.api.auth import get_me, register
+from app.api.admin import (
+    get_email_settings,
+    get_menu_visibility,
+    update_email_settings,
+    update_menu_visibility,
+)
 from app.api.accounts import list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
 from app.api.tasks import execute_checkin, get_today_status, update_task_config
@@ -22,13 +27,18 @@ from app.models.account import GameRole, MihoyoAccount
 from app.models.system_setting import SystemSetting
 from app.models.task_log import TaskConfig, TaskLog
 from app.models.user import User
-from app.schemas.system_setting import AdminEmailSettingsUpdate
+from app.schemas.system_setting import (
+    AdminEmailSettingsUpdate,
+    AdminMenuVisibilityItemUpdate,
+    AdminMenuVisibilityUpdate,
+)
 from app.schemas.task_log import CheckinSummary, CheckinResult, TaskConfigCreate
 from app.schemas.user import UserCreate
 from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
 from app.services.login_state import LoginStateService
 from app.services.notifier import NotificationService
 from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, SchedulerService
+from app.services.system_settings import SystemSettingsService
 from app.utils.timezone import utc_now, utc_now_naive
 from app.utils.crypto import decrypt_text, encrypt_text
 from app.utils.device import HYPERION_APP_VERSION
@@ -60,6 +70,9 @@ class FakeClient:
 
 class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        if hasattr(SystemSettingsService, "_storage_ready_sync_engines"):
+            SystemSettingsService._storage_ready_sync_engines.clear()
+
         self.engine = create_async_engine(
             "sqlite+aiosqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -70,6 +83,8 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(Base.metadata.create_all)
 
     async def asyncTearDown(self):
+        if hasattr(SystemSettingsService, "_storage_ready_sync_engines"):
+            SystemSettingsService._storage_ready_sync_engines.clear()
         await self.engine.dispose()
 
     async def _new_session(self):
@@ -88,6 +103,112 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(config.cron_expr, "0 6 * * *")
         self.assertTrue(config.is_enabled)
+
+    async def test_register_returns_visible_menu_keys_consistent_with_get_me(self):
+        async with await self._new_session() as session:
+            registered = await register(
+                UserCreate(username="visible-menu-user", password="password123"),
+                db=session,
+            )
+            db_user = (
+                await session.execute(select(User).where(User.id == registered.id))
+            ).scalar_one()
+            me = await get_me(current_user=db_user, db=session)
+
+        self.assertEqual(registered.visible_menu_keys, me.visible_menu_keys)
+        self.assertIn("dashboard", registered.visible_menu_keys)
+        self.assertIn("admin_users", registered.visible_menu_keys)
+        self.assertIn("admin_menu_management", registered.visible_menu_keys)
+
+    async def test_get_me_persists_system_settings_for_new_database(self):
+        async with await self._new_session() as session:
+            user = User(username="persist-settings-user", password_hash="x", role="admin", is_active=True)
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+            response = await get_me(current_user=user, db=session)
+
+        self.assertIn("dashboard", response.visible_menu_keys)
+
+        async with await self._new_session() as verify_session:
+            settings_count = (
+                await verify_session.execute(select(func.count(SystemSetting.id)))
+            ).scalar_one()
+
+        self.assertEqual(settings_count, 1)
+
+    async def test_register_persists_system_settings_response_side_effect(self):
+        async with await self._new_session() as session:
+            response = await register(
+                UserCreate(username="persist-register-settings", password="password123"),
+                db=session,
+            )
+
+        self.assertIn("dashboard", response.visible_menu_keys)
+
+        async with await self._new_session() as verify_session:
+            settings_count = (
+                await verify_session.execute(select(func.count(SystemSetting.id)))
+            ).scalar_one()
+
+        self.assertEqual(settings_count, 1)
+
+    async def test_get_or_create_persists_system_settings_without_committing_unrelated_session_changes(self):
+        async with await self._new_session() as session:
+            account = MihoyoAccount(user_id=1, nickname="事务边界账号", cookie_status="valid")
+            session.add(account)
+            await session.commit()
+            await session.refresh(account)
+
+            account.cookie_status = "expired"
+            account.last_refresh_status = "failed"
+            account.last_refresh_message = "不应被提前提交"
+
+            config = await SystemSettingsService(session).get_or_create()
+            self.assertFalse(config.smtp_enabled)
+
+        async with await self._new_session() as verify_session:
+            settings_count = (
+                await verify_session.execute(select(func.count(SystemSetting.id)))
+            ).scalar_one()
+            stored_account = (
+                await verify_session.execute(select(MihoyoAccount).where(MihoyoAccount.id == account.id))
+            ).scalar_one()
+
+        self.assertEqual(settings_count, 1)
+        self.assertEqual(stored_account.cookie_status, "valid")
+        self.assertIsNone(stored_account.last_refresh_status)
+        self.assertIsNone(stored_account.last_refresh_message)
+
+    async def test_system_settings_storage_preparation_runs_once_and_get_or_create_avoids_schema_inspection_hot_path(self):
+        async with await self._new_session() as session:
+            service = SystemSettingsService(session)
+
+            with patch.object(
+                SystemSettingsService,
+                "ensure_table_exists",
+                new=AsyncMock(),
+            ) as mock_ensure_table_exists, patch.object(
+                SystemSettingsService,
+                "ensure_required_columns",
+                new=AsyncMock(),
+            ) as mock_ensure_required_columns:
+                await service.ensure_storage_ready()
+                mock_ensure_table_exists.assert_awaited_once()
+                mock_ensure_required_columns.assert_awaited_once()
+
+                mock_ensure_table_exists.reset_mock()
+                mock_ensure_required_columns.reset_mock()
+
+                config = await service.get_or_create()
+                self.assertFalse(config.smtp_enabled)
+                mock_ensure_table_exists.assert_not_awaited()
+                mock_ensure_required_columns.assert_not_awaited()
+
+                await service.ensure_storage_ready()
+                mock_ensure_table_exists.assert_not_awaited()
+                mock_ensure_required_columns.assert_not_awaited()
 
     async def test_scheduler_load_all_schedules_creates_missing_default_config_and_registers_job(self):
         async with await self._new_session() as session:
@@ -1734,6 +1855,145 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             stored = (await session.execute(select(SystemSetting))).scalar_one()
             self.assertEqual(stored.id, config.id)
 
+        await legacy_engine.dispose()
+
+    async def test_get_me_returns_visible_menu_keys_by_role(self):
+        async with await self._new_session() as session:
+            admin = User(username="menu-admin", password_hash="x", role="admin", is_active=True)
+            user = User(username="menu-user", password_hash="x", role="user", is_active=True)
+            session.add_all([admin, user])
+            await session.commit()
+            await session.refresh(admin)
+            await session.refresh(user)
+
+            admin_response = await get_me(current_user=admin, db=session)
+            user_response = await get_me(current_user=user, db=session)
+
+        self.assertIn("dashboard", admin_response.visible_menu_keys)
+        self.assertIn("admin_users", admin_response.visible_menu_keys)
+        self.assertIn("admin_menu_management", admin_response.visible_menu_keys)
+        self.assertIn("dashboard", user_response.visible_menu_keys)
+        self.assertNotIn("admin_users", user_response.visible_menu_keys)
+        self.assertNotIn("admin_menu_management", user_response.visible_menu_keys)
+
+    async def test_update_menu_visibility_persists_and_affects_visible_menu_keys(self):
+        async with await self._new_session() as session:
+            admin = User(username="visibility-admin", password_hash="x", role="admin", is_active=True)
+            user = User(username="visibility-user", password_hash="x", role="user", is_active=True)
+            session.add_all([admin, user])
+            await session.commit()
+            await session.refresh(admin)
+            await session.refresh(user)
+
+            updated = await update_menu_visibility(
+                payload=AdminMenuVisibilityUpdate(
+                    items=[
+                        AdminMenuVisibilityItemUpdate(key="gacha", user_visible=False, admin_visible=True),
+                        AdminMenuVisibilityItemUpdate(key="admin_users", user_visible=False, admin_visible=False),
+                    ]
+                ),
+                admin=admin,
+                db=session,
+            )
+            read_back = await get_menu_visibility(admin=admin, db=session)
+            admin_response = await get_me(current_user=admin, db=session)
+            user_response = await get_me(current_user=user, db=session)
+
+        by_key = {item.key: item for item in updated.items}
+        self.assertFalse(by_key["gacha"].user_visible)
+        self.assertFalse(by_key["admin_users"].admin_visible)
+        self.assertTrue(by_key["admin_menu_management"].admin_visible)
+        self.assertFalse(by_key["admin_menu_management"].editable)
+        self.assertEqual(len(read_back.items), len(updated.items))
+        self.assertNotIn("gacha", user_response.visible_menu_keys)
+        self.assertIn("gacha", admin_response.visible_menu_keys)
+        self.assertNotIn("admin_users", admin_response.visible_menu_keys)
+        self.assertIn("admin_menu_management", admin_response.visible_menu_keys)
+
+    async def test_update_menu_visibility_rejects_unknown_or_guarded_keys(self):
+        async with await self._new_session() as session:
+            admin = User(username="guard-admin", password_hash="x", role="admin", is_active=True)
+            session.add(admin)
+            await session.commit()
+            await session.refresh(admin)
+
+            with self.assertRaises(HTTPException) as unknown_ctx:
+                await update_menu_visibility(
+                    payload=AdminMenuVisibilityUpdate(
+                        items=[AdminMenuVisibilityItemUpdate(key="unknown_menu", user_visible=True, admin_visible=True)]
+                    ),
+                    admin=admin,
+                    db=session,
+                )
+
+            with self.assertRaises(HTTPException) as guarded_ctx:
+                await update_menu_visibility(
+                    payload=AdminMenuVisibilityUpdate(
+                        items=[
+                            AdminMenuVisibilityItemUpdate(
+                                key="admin_menu_management",
+                                user_visible=False,
+                                admin_visible=False,
+                            )
+                        ]
+                    ),
+                    admin=admin,
+                    db=session,
+                )
+
+        self.assertEqual(unknown_ctx.exception.status_code, 400)
+        self.assertIn("unknown_menu", unknown_ctx.exception.detail)
+        self.assertEqual(guarded_ctx.exception.status_code, 400)
+        self.assertIn("admin_menu_management", guarded_ctx.exception.detail)
+
+    async def test_get_menu_visibility_recovers_legacy_system_settings_without_menu_column(self):
+        legacy_engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        async with legacy_engine.begin() as conn:
+            await conn.run_sync(User.__table__.create)
+            await conn.exec_driver_sql(
+                """
+                CREATE TABLE system_settings (
+                    id INTEGER PRIMARY KEY,
+                    smtp_enabled BOOLEAN,
+                    smtp_host VARCHAR(255),
+                    smtp_port INTEGER,
+                    smtp_user VARCHAR(255),
+                    smtp_password_encrypted VARCHAR(1024),
+                    smtp_use_ssl BOOLEAN,
+                    smtp_sender_name VARCHAR(255),
+                    smtp_sender_email VARCHAR(255),
+                    hyperion_device_id VARCHAR(64),
+                    hyperion_device_fp VARCHAR(64),
+                    hyperion_device_fp_updated_at DATETIME,
+                    updated_at DATETIME
+                )
+                """
+            )
+            await conn.exec_driver_sql(
+                """
+                INSERT INTO system_settings (
+                    id, smtp_enabled, smtp_port, smtp_use_ssl, updated_at
+                ) VALUES (1, 0, 465, 1, '2026-03-18 00:00:00')
+                """
+            )
+
+        LegacySession = async_sessionmaker(legacy_engine, class_=AsyncSession, expire_on_commit=False)
+        async with LegacySession() as session:
+            admin = User(username="legacy-admin", password_hash="x", role="admin", is_active=True)
+            session.add(admin)
+            await session.commit()
+            await session.refresh(admin)
+
+            response = await get_menu_visibility(admin=admin, db=session)
+            result = await session.execute(select(SystemSetting))
+            config = result.scalar_one()
+
+        self.assertTrue(any(item.key == "dashboard" for item in response.items))
+        self.assertIsNotNone(config.menu_visibility_json)
         await legacy_engine.dispose()
 
 

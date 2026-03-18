@@ -19,6 +19,8 @@ from app.database import get_db
 from app.models.user import User
 from app.services.task_config import DEFAULT_TASK_CRON_EXPR
 from app.models.task_log import TaskConfig
+from app.services.menu_visibility import resolve_visible_menu_keys
+from app.services.system_settings import SystemSettingsService
 from app.schemas.user import (
     UserCreate, UserLogin, UserResponse, UserUpdate,
     TokenResponse, TokenData,
@@ -66,6 +68,26 @@ async def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+async def build_user_response(*, user: User, db: AsyncSession) -> UserResponse:
+    settings = await SystemSettingsService(db).get_or_create()
+    return UserResponse.model_validate(
+        {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "email_notify": user.email_notify,
+            "notify_on": user.notify_on,
+            "role": user.role,
+            "is_active": user.is_active,
+            "created_at": user.created_at,
+            "visible_menu_keys": resolve_visible_menu_keys(
+                role=user.role,
+                raw_value=settings.menu_visibility_json,
+            ),
+        }
+    )
+
+
 @router.post("/register", response_model=UserResponse)
 async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -103,7 +125,7 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
     await db.refresh(user)
-    return user
+    return await build_user_response(user=user, db=db)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -129,9 +151,12 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """获取当前用户信息"""
-    return current_user
+    return await build_user_response(user=current_user, db=db)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -150,7 +175,7 @@ async def update_me(
 
     await db.commit()
     await db.refresh(current_user)
-    return current_user
+    return await build_user_response(user=current_user, db=db)
 
 
 @router.post("/refresh", response_model=TokenResponse)

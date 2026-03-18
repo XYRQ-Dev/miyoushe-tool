@@ -25,3 +25,26 @@ class AdminEmailSettingsUpdate(BaseModel):
     smtp_use_ssl: bool = True
     smtp_sender_name: str = Field(default="", max_length=255)
     smtp_sender_email: str = Field(default="", max_length=255)
+
+
+class AdminMenuVisibilityItem(BaseModel):
+    key: str
+    label: str
+    path: str
+    user_visible: bool
+    admin_visible: bool
+    editable: bool
+
+
+class AdminMenuVisibilityResponse(BaseModel):
+    items: list[AdminMenuVisibilityItem]
+
+
+class AdminMenuVisibilityItemUpdate(BaseModel):
+    key: str = Field(..., min_length=1, max_length=64)
+    user_visible: bool
+    admin_visible: bool
+
+
+class AdminMenuVisibilityUpdate(BaseModel):
+    items: list[AdminMenuVisibilityItemUpdate] = Field(default_factory=list)
