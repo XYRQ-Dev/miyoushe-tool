@@ -33,6 +33,10 @@
           <el-icon><Document /></el-icon>
           <template #title>签到日志</template>
         </el-menu-item>
+        <el-menu-item index="/gacha">
+          <el-icon><Collection /></el-icon>
+          <template #title>抽卡记录</template>
+        </el-menu-item>
         <el-menu-item v-if="userStore.isAdmin" index="/admin/users">
           <el-icon><UserFilled /></el-icon>
           <template #title>用户信息列表</template>
@@ -105,7 +109,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
-  Star, Odometer, User, UserFilled, Document, Setting,
+  Star, Odometer, User, UserFilled, Document, Setting, Collection,
   Expand, Fold, ArrowDown, SwitchButton, Sunny, Moon,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
@@ -123,6 +127,7 @@ const pageTitle = computed(() => {
     '/accounts': '账号管理',
     '/logs': '签到日志',
     '/admin/users': '用户信息列表',
+    '/gacha': '抽卡记录',
     '/settings': '系统设置',
   }
   return map[route.path] || '米游社签到'

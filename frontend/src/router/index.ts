@@ -31,6 +31,11 @@ const router = createRouter({
           component: () => import('../views/TaskLogs.vue'),
         },
         {
+          path: 'gacha',
+          name: 'GachaRecords',
+          component: () => import('../views/GachaRecords.vue'),
+        },
+        {
           path: 'settings',
           name: 'Settings',
           component: () => import('../views/Settings.vue'),

@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
+from app.models.gacha import GachaImportJob, GachaRecord
 from app.schemas.account import AccountResponse, AccountListResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
 from app.services.login_state import LoginStateService
@@ -114,6 +115,21 @@ async def delete_account(
     )
     for role in roles.scalars().all():
         await db.delete(role)
+
+    # 抽卡记录与导入历史按账号归属。
+    # 删除账号时如果不一起清理，后续列表会出现“账号已不存在，但资产还留在库里”的幽灵数据，
+    # 既会污染统计，也会让用户误以为系统支持独立脱离账号查看。
+    gacha_records = await db.execute(
+        select(GachaRecord).where(GachaRecord.account_id == account_id)
+    )
+    for record in gacha_records.scalars().all():
+        await db.delete(record)
+
+    gacha_jobs = await db.execute(
+        select(GachaImportJob).where(GachaImportJob.account_id == account_id)
+    )
+    for job in gacha_jobs.scalars().all():
+        await db.delete(job)
 
     await db.delete(account)
     await db.commit()

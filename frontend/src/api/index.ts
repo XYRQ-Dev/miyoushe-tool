@@ -93,4 +93,39 @@ export const adminApi = {
   }) => api.put('/admin/system-settings/email', data),
 }
 
+// ===== 抽卡记录 API =====
+export const gachaApi = {
+  getAccounts: () => api.get('/gacha/accounts'),
+  import: (data: { account_id: number | null; game: string; import_url: string }) =>
+    api.post('/gacha/import', data),
+  importJson: (data: {
+    account_id: number | null
+    game: string
+    source_name?: string
+    records: Array<{
+      record_id: string
+      pool_type: string
+      pool_name?: string | null
+      item_name: string
+      item_type?: string | null
+      rank_type: string
+      time_text: string
+    }>
+  }) => api.post('/gacha/import-json', data),
+  getSummary: (params: { account_id: number; game: string }) =>
+    api.get('/gacha/summary', { params }),
+  listRecords: (params: {
+    account_id: number
+    game: string
+    pool_type?: string
+    page: number
+    page_size: number
+  }) =>
+    api.get('/gacha/records', { params }),
+  exportJson: (params: { account_id: number; game: string }) =>
+    api.get('/gacha/export', { params }),
+  reset: (params: { account_id: number; game: string }) =>
+    api.delete('/gacha/reset', { params }),
+}
+
 export default api
