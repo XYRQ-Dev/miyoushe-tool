@@ -128,4 +128,10 @@ export const gachaApi = {
     api.delete('/gacha/reset', { params }),
 }
 
+// ===== 实时便笺 API =====
+export const notesApi = {
+  getAccounts: () => api.get('/notes/accounts'),
+  getSummary: (params: { account_id: number }) => api.get('/notes/summary', { params }),
+}
+
 export default api
