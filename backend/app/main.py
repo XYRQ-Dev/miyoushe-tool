@@ -21,11 +21,12 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import init_db, async_session
-from app.models.account import MihoyoAccount, GameRole
+from app.models.account import MihoyoAccount
 from app.services.browser import browser_manager
 from app.services.qr_login import qr_login_manager
 from app.services.scheduler import scheduler_service
 from app.services.checkin import CheckinService
+from app.services.account_role_sync import sync_account_roles
 from app.services.login_state import LoginStateService
 from app.utils.crypto import encrypt_cookie
 from app.utils.timezone import utc_now_naive
@@ -80,6 +81,7 @@ app.add_middleware(
 # 注册 API 路由
 from app.api.auth import router as auth_router
 from app.api.accounts import router as accounts_router
+from app.api.assets import router as assets_router
 from app.api.gacha import router as gacha_router
 from app.api.health_center import router as health_center_router
 from app.api.redeem import router as redeem_router
@@ -90,6 +92,7 @@ from app.api.admin import router as admin_router
 
 app.include_router(auth_router)
 app.include_router(accounts_router)
+app.include_router(assets_router)
 app.include_router(gacha_router)
 app.include_router(health_center_router)
 app.include_router(redeem_router)
@@ -170,11 +173,6 @@ async def qr_login_websocket(
                                     "message": "待刷新的账号不存在",
                                 })
                                 return
-                            old_roles = await db.execute(
-                                select(GameRole).where(GameRole.account_id == account.id)
-                            )
-                            for role in old_roles.scalars().all():
-                                await db.delete(role)
                         else:
                             account = MihoyoAccount(user_id=user_id)
                             db.add(account)
@@ -197,16 +195,13 @@ async def qr_login_websocket(
                         # 获取并保存游戏角色
                         checkin_service = CheckinService(db)
                         roles = await checkin_service.fetch_game_roles(cookie_str)
-                        for role_data in roles:
-                            role = GameRole(
-                                account_id=account.id,
-                                game_biz=role_data.get("game_biz", ""),
-                                game_uid=role_data.get("game_uid", ""),
-                                nickname=role_data.get("nickname", ""),
-                                region=role_data.get("region", ""),
-                                level=role_data.get("level", 0),
-                            )
-                            db.add(role)
+                        # 这里必须复用同一业务角色的现有数据库行，不能简单删除后重建。
+                        # 否则 `TaskLog.game_role_id`、用户对角色的启停选择等本地状态都会在重新扫码后失效。
+                        await sync_account_roles(
+                            db=db,
+                            account_id=account.id,
+                            role_payloads=roles,
+                        )
 
                         # 更新账号昵称
                         if roles:

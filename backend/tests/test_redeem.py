@@ -1,5 +1,8 @@
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
+
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import httpx
 from fastapi import HTTPException

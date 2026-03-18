@@ -19,6 +19,8 @@ export interface UserInfo {
 export const useUserStore = defineStore('user', () => {
   const userInfo = ref<UserInfo | null>(null)
   const darkMode = ref(localStorage.getItem('dark_mode') === 'true')
+  const userInfoLoaded = ref(false)
+  let userInfoPromise: Promise<void> | null = null
 
   const isLoggedIn = computed(() => !!localStorage.getItem('access_token'))
   const isAdmin = computed(() => userInfo.value?.role === 'admin')
@@ -35,18 +37,52 @@ export const useUserStore = defineStore('user', () => {
   }
 
   async function fetchUserInfo() {
-    try {
-      const { data } = await authApi.getMe()
-      userInfo.value = data
-    } catch {
-      logout()
+    if (!isLoggedIn.value) {
+      userInfo.value = null
+      userInfoLoaded.value = true
+      return
     }
+
+    if (userInfoPromise) {
+      await userInfoPromise
+      return
+    }
+
+    // 登录态恢复可能同时被路由守卫、布局和页面 onMounted 触发。
+    // 这里必须把并发请求合并成同一个 Promise，否则既会放大接口压力，也会让“谁先写回 userInfo”
+    // 变成竞态条件，进一步诱发管理员菜单闪烁或管理员路由误判。
+    userInfoPromise = (async () => {
+      try {
+        const { data } = await authApi.getMe()
+        userInfo.value = data
+      } catch {
+        logout()
+      } finally {
+        userInfoLoaded.value = true
+        userInfoPromise = null
+      }
+    })()
+
+    try {
+      await userInfoPromise
+    } finally {
+      userInfoPromise = null
+    }
+  }
+
+  async function ensureUserInfoLoaded() {
+    if (!isLoggedIn.value || userInfoLoaded.value) {
+      return
+    }
+    await fetchUserInfo()
   }
 
   function logout() {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     userInfo.value = null
+    userInfoLoaded.value = false
+    userInfoPromise = null
   }
 
   function setDarkMode(enabled: boolean) {
@@ -78,6 +114,7 @@ export const useUserStore = defineStore('user', () => {
     login,
     register,
     fetchUserInfo,
+    ensureUserInfoLoaded,
     logout,
     setDarkMode,
     toggleDarkMode,

@@ -36,6 +36,11 @@ const router = createRouter({
           component: () => import('../views/GachaRecords.vue'),
         },
         {
+          path: 'assets',
+          name: 'RoleAssets',
+          component: () => import('../views/RoleAssets.vue'),
+        },
+        {
           path: 'health',
           name: 'HealthCenter',
           component: () => import('../views/HealthCenter.vue'),
@@ -62,13 +67,20 @@ const router = createRouter({
   ],
 })
 
-// 路由守卫：未登录跳转到登录页
-router.beforeEach((to, from, next) => {
+// 路由守卫：受保护页面在放行前先恢复用户信息，避免刷新时把管理员误判成普通用户。
+router.beforeEach(async (to, from, next) => {
   const token = localStorage.getItem('access_token')
   const userStore = useUserStore()
   if (to.meta.requiresAuth !== false && !token) {
     next('/login')
-  } else if (to.path === '/login' && token) {
+    return
+  }
+
+  if (token) {
+    await userStore.ensureUserInfoLoaded()
+  }
+
+  if (to.path === '/login' && token) {
     next('/')
   } else if (to.meta.requiresAdmin && !userStore.isAdmin) {
     next('/')

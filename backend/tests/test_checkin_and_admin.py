@@ -1,8 +1,11 @@
+import os
 import json
 import unittest
 from datetime import datetime, timedelta, timezone, date
 from email.header import decode_header
 from unittest.mock import AsyncMock, patch
+
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from fastapi import HTTPException
 from sqlalchemy import select

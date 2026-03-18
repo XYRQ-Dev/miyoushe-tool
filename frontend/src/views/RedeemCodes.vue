@@ -317,6 +317,7 @@ import { Lightning, Refresh } from '@element-plus/icons-vue'
 import { redeemApi } from '../api'
 import { getGameName } from '../constants/game'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
+import { resolveRouteGamePrefill } from '../utils/gameRoutePrefill'
 
 type GameOption = { value: string; label: string }
 
@@ -375,6 +376,7 @@ const detailLoading = ref(false)
 const executing = ref(false)
 const route = useRoute()
 const routeAccountPrefillConsumed = ref(false)
+const routeGamePrefillConsumed = ref(false)
 
 const gameOptions = computed(() => GAME_OPTIONS)
 
@@ -462,17 +464,35 @@ function applyPreferredAccountSelection() {
   syncSelectedAccounts()
 }
 
+function applyPreferredGameSelection() {
+  const preferredAccountId = selectedAccountIds.value[0]
+  const preferredAccount = accounts.value.find((account) => account.id === preferredAccountId)
+  const availableGames = preferredAccount
+    ? preferredAccount.supported_games
+    : Array.from(new Set(accounts.value.flatMap((account) => account.supported_games)))
+
+  const prefillResult = resolveRouteGamePrefill(route.query.game, {
+    consumed: routeGamePrefillConsumed.value,
+    availableGames,
+  })
+  routeGamePrefillConsumed.value = prefillResult.consumed
+
+  if (prefillResult.preferredGame !== null) {
+    selectedGame.value = prefillResult.preferredGame
+  } else if (!availableGames.includes(selectedGame.value)) {
+    selectedGame.value = availableGames[0] || 'genshin'
+  }
+}
+
 async function loadAccounts() {
   accountsLoading.value = true
   try {
     const { data } = await redeemApi.listAccounts()
     accounts.value = data.accounts || []
 
-    if (!accounts.value.some((account) => account.supported_games.includes(selectedGame.value))) {
-      const firstSupportedGame = accounts.value.find((account) => account.supported_games.length)?.supported_games[0]
-      selectedGame.value = firstSupportedGame || 'genshin'
-    }
     applyPreferredAccountSelection()
+    applyPreferredGameSelection()
+    syncSelectedAccounts()
   } catch (error) {
     // 账号源失败时直接清空本地状态，避免用户继续对旧账号集合做批量操作。
     accounts.value = []

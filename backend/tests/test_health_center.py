@@ -1,5 +1,8 @@
+import os
 import unittest
 from datetime import timedelta
+
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool

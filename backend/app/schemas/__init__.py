@@ -1,3 +1,4 @@
+from app.schemas.assets import *
 from app.schemas.user import *
 from app.schemas.account import *
 from app.schemas.gacha import *

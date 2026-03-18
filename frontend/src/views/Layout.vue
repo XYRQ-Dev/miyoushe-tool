@@ -37,6 +37,10 @@
           <el-icon><Collection /></el-icon>
           <template #title>抽卡记录</template>
         </el-menu-item>
+        <el-menu-item index="/assets">
+          <el-icon><Collection /></el-icon>
+          <template #title>角色资产</template>
+        </el-menu-item>
         <el-menu-item index="/health">
           <el-icon><Warning /></el-icon>
           <template #title>账号健康中心</template>
@@ -136,6 +140,7 @@ const pageTitle = computed(() => {
     '/logs': '签到日志',
     '/admin/users': '用户信息列表',
     '/gacha': '抽卡记录',
+    '/assets': '角色资产',
     '/health': '账号健康中心',
     '/redeem': '兑换码中心',
     '/settings': '系统设置',
@@ -149,7 +154,7 @@ function handleLogout() {
 }
 
 onMounted(() => {
-  userStore.fetchUserInfo()
+  userStore.ensureUserInfoLoaded()
 })
 </script>
 

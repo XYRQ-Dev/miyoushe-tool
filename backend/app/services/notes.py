@@ -36,6 +36,7 @@ class NoteGameConfig:
     game_name: str
     endpoint: str
     role_prefixes: tuple[str, ...]
+    verification_retcodes: tuple[int, ...]
 
 
 SUPPORTED_NOTE_GAME_CONFIGS: tuple[NoteGameConfig, ...] = (
@@ -44,12 +45,14 @@ SUPPORTED_NOTE_GAME_CONFIGS: tuple[NoteGameConfig, ...] = (
         game_name="原神",
         endpoint="https://api-takumi-record.mihoyo.com/game_record/app/genshin/api/dailyNote",
         role_prefixes=("hk4e_",),
+        verification_retcodes=(5003,),
     ),
     NoteGameConfig(
         game="starrail",
         game_name="星穹铁道",
         endpoint="https://api-takumi-record.mihoyo.com/game_record/app/hkrpg/api/note",
         role_prefixes=("hkrpg_",),
+        verification_retcodes=(10041,),
     ),
 )
 
@@ -217,6 +220,18 @@ class NoteService:
         if retcode in (-100, -101):
             return self._build_invalid_cookie_card(role, game=config.game, game_name=config.game_name)
 
+        # 这里必须按游戏精确命中“需要验证”的 retcode，不能继续全局兜底：
+        # 1. 5003 与 10041 来自不同游戏链路，跨游戏复用会把真正的普通错误误标成“需验证”
+        # 2. 一旦误标，前端会错误引导用户去 App 做验证，反而掩盖真实上游故障
+        # 3. 把映射收敛到配置层后，后续协议变动时只需要按游戏增量维护，不会污染其他便笺入口
+        if retcode in config.verification_retcodes:
+            return self._build_verification_required_card(
+                role,
+                game=config.game,
+                game_name=config.game_name,
+                retcode=retcode,
+            )
+
         message = payload.get("message") or payload.get("msg") or f"上游返回错误（code: {retcode}）"
         return self._build_error_card(role, game=config.game, game_name=config.game_name, message=message)
 
@@ -257,6 +272,34 @@ class NoteService:
             level=role.level,
             status="error",
             message=message,
+            updated_at=None,
+            metrics=[],
+        )
+
+    def _build_verification_required_card(
+        self,
+        role: GameRole,
+        *,
+        game: str,
+        game_name: str,
+        retcode: int,
+    ) -> NoteCardResponse:
+        if retcode == 5003:
+            message = "实时便笺查询触发上游验证，请先在米游社 App 内完成账号验证后再试"
+        else:
+            message = "实时便笺访问受限，请先在米游社 App 内重新确认登录或完成账号验证后再试"
+
+        return NoteCardResponse(
+            role_id=role.id,
+            game=game,
+            game_name=game_name,
+            game_biz=role.game_biz,
+            role_uid=role.game_uid,
+            role_nickname=role.nickname,
+            region=role.region,
+            level=role.level,
+            status="verification_required",
+            message=f"{message}（code: {retcode}）",
             updated_at=None,
             metrics=[],
         )

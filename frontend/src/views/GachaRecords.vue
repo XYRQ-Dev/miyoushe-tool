@@ -252,6 +252,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload } from '@element-plus/icons-vue'
 import { gachaApi } from '../api'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
+import { resolveRouteGamePrefill } from '../utils/gameRoutePrefill'
 
 type GameOption = { value: string; label: string }
 type GachaAccount = { id: number; nickname?: string; mihoyo_uid?: string; supported_games: string[] }
@@ -280,6 +281,7 @@ const latestImportMessage = ref('尚未执行导入')
 const jsonFileInput = useTemplateRef<HTMLInputElement>('jsonFileInput')
 const route = useRoute()
 const routeAccountPrefillConsumed = ref(false)
+const routeGamePrefillConsumed = ref(false)
 
 const currentAccount = computed(() => (
   accounts.value.find((account) => account.id === selectedAccountId.value) || null
@@ -331,7 +333,16 @@ async function loadAccounts() {
   }
 
   const account = accounts.value.find((item) => item.id === selectedAccountId.value)
-  if (account && (!selectedGame.value || !account.supported_games.includes(selectedGame.value))) {
+  const prefilledGame = resolveRouteGamePrefill(route.query.game, {
+    consumed: routeGamePrefillConsumed.value,
+    availableGames: account?.supported_games || [],
+  })
+  routeGamePrefillConsumed.value = prefilledGame.consumed
+
+  if (prefilledGame.preferredGame !== null) {
+    // 角色资产页会同时带上账号和游戏上下文，抽卡页应优先落到该账号的对应游戏档案。
+    selectedGame.value = prefilledGame.preferredGame
+  } else if (account && (!selectedGame.value || !account.supported_games.includes(selectedGame.value))) {
     selectedGame.value = account.supported_games[0] || ''
   }
 }

@@ -1,8 +1,11 @@
+import os
 import base64
 import sys
 import types
 import unittest
 from unittest.mock import AsyncMock
+
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 playwright_module = types.ModuleType("playwright")
 playwright_async_api = types.ModuleType("playwright.async_api")

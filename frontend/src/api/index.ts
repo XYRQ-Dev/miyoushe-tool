@@ -7,6 +7,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
+import { applyAuthorizationHeader } from './authHeader'
 
 const api = axios.create({
   baseURL: '/api',
@@ -17,7 +18,7 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token')
   if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+    applyAuthorizationHeader(config, token)
   }
   return config
 })
@@ -58,6 +59,11 @@ export const accountApi = {
   delete: (id: number) => api.delete(`/accounts/${id}`),
   refreshCookie: (id: number) => api.post(`/accounts/${id}/refresh-cookie`),
   refreshLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
+}
+
+// ===== 角色资产总览 API =====
+export const assetApi = {
+  getOverview: () => api.get('/assets/overview'),
 }
 
 // ===== 任务 API =====

@@ -15,4 +15,5 @@ aiosmtplib==3.0.2
 jinja2==3.1.4
 aiofiles==24.1.0
 bcrypt==4.2.0
+asyncmy==0.2.10
 aiosqlite==0.20.0

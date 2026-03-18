@@ -1,6 +1,9 @@
+import os
 import json
 import unittest
 from unittest.mock import patch
+
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine

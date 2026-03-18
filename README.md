@@ -1,6 +1,6 @@
 # 米游社自动签到 Web 平台
 
-基于 `FastAPI + Vue 3 + SQLite + Playwright` 的米游社自动签到管理平台，支持扫码登录、登录态自动维护、手动/定时签到、签到日志查看、邮件通知和管理员后台配置。
+基于 `FastAPI + Vue 3 + MySQL 8 + Playwright` 的米游社账号资产管理平台，支持扫码登录、登录态自动维护、手动/定时签到、实时便笺、角色资产总览、抽卡记录归档、兑换码中心、账号健康中心、邮件通知和管理员后台配置。
 
 ## 功能概览
 
@@ -11,6 +11,11 @@
 - 手动签到与定时签到共用同一套邮件通知策略
 - 签到日志分页、状态筛选、日期筛选与最近 7 天日历统计
 - 日志接口与前端展示统一按东八区语义处理
+- 仪表盘实时便笺面板，可查看原神、星铁等支持游戏的实时状态
+- 角色资产总览，按账号聚合角色、便笺、抽卡与兑换入口
+- 账号健康中心，聚合登录态、签到结果与重登风险
+- 抽卡记录中心，支持链接导入、JSON 导入导出、按游戏重置与基础统计
+- 兑换码中心，支持按游戏筛选账号、批量执行与历史批次回看
 - 用户个人通知邮箱、通知策略与深色模式设置
 - 管理员系统 SMTP 配置与用户启停管理
 
@@ -35,7 +40,7 @@
 .
 ├─ backend/   后端 FastAPI 服务
 ├─ frontend/  前端 Vue 3 管理界面
-├─ data/      SQLite 数据目录
+├─ data/      旧 SQLite 迁移源库可选目录
 ├─ .env.example
 └─ docker-compose.yml
 ```
@@ -52,6 +57,8 @@ python -m venv .venv313
 .\.venv313\Scripts\activate
 pip install -r requirements.txt
 python -m playwright install chromium
+# 本机已安装 MySQL 时，先创建空库并在 .env 中配置 DATABASE_URL；
+# 例如：mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -70,7 +77,7 @@ npm run dev
 
 ## Docker 部署
 
-根目录提供了 `docker-compose.yml`，可直接启动前后端：
+根目录提供了 `docker-compose.yml`，默认按 `MySQL 8 + 后端 + 前端` 一起启动：
 
 ```powershell
 docker compose up -d --build
@@ -78,15 +85,51 @@ docker compose up -d --build
 
 默认端口：
 
+- MySQL：`3306`
 - 前端：`80`
 - 后端：`8000`
 
 默认 Docker 配置会把后端容器时区固定为 `Asia/Shanghai`，因此 `docker logs miyoushe-backend`
 里看到的业务日志和 Uvicorn 访问日志默认都是东八区时间；如果脱离 Docker 单独运行，则日志时间跟随该进程所在系统时区。
 
+### 从旧 SQLite 升级到 MySQL 8
+
+如果你本机已经安装了 MySQL 8，推荐优先走宿主机 MySQL 路径：
+
+```powershell
+cd backend
+.\.venv313\Scripts\python.exe scripts\migrate_sqlite_to_mysql.py --sqlite-path ..\data\miyoushe.db --mysql-url "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
+cd ..
+docker compose up -d --build frontend
+```
+
+如果你希望直接使用 `docker-compose.yml` 内置的 MySQL 容器，也可以先启动数据库容器，再在宿主机执行迁移：
+
+```powershell
+docker compose up -d mysql
+cd backend
+.\.venv313\Scripts\python.exe scripts\migrate_sqlite_to_mysql.py --sqlite-path ..\data\miyoushe.db --mysql-url "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
+cd ..
+docker compose up -d --build backend frontend
+```
+
+迁移脚本只迁核心数据：
+
+- `users`
+- `mihoyo_accounts`
+- `game_roles`
+- `task_configs`
+- `task_logs`
+- `system_settings`
+
+以下历史数据不会迁移，会在新库中从空状态重新积累：
+
+- 抽卡导入历史与抽卡记录
+- 兑换码批次与执行明细
+
 ## 配置说明
 
-项目当前有四类常用配置：
+项目当前有五类常用配置：
 
 ### 1. 邮件通知配置
 
@@ -96,18 +139,26 @@ docker compose up -d --build
 
 环境变量仍然保留作为系统 SMTP 的回退配置，见 [.env.example](/D:/UnityProject/MiHaYouTool/miyoushe-tool/.env.example) 与 [docker-compose.yml](/D:/UnityProject/MiHaYouTool/miyoushe-tool/docker-compose.yml)。
 
-### 2. 时间与日志配置
+### 2. 数据库配置
+
+- 当前生产默认使用 `MySQL 8`
+- 后端读取单一 `DATABASE_URL`
+- Docker Compose 通过 `MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD` 启动 MySQL 服务
+- 本机直接启动后端时，默认连接目标是 `127.0.0.1:3306`
+- 若你要接外部 MySQL，只需覆盖 `DATABASE_URL`，不必继续使用内置 MySQL 容器
+
+### 3. 时间与日志配置
 
 - 应用层日期判断和日志接口展示按 `Asia/Shanghai` 处理
 - Docker 部署下，后端容器默认也会固定为 `Asia/Shanghai`，因此 `docker logs` 中看到的业务日志和 Uvicorn 访问日志默认也是东八区
 - 如果脱离 Docker 单独运行，控制台日志时间跟随运行进程所在系统时区
 
-### 3. 外观配置
+### 4. 外观配置
 
 - 前端支持浅色 / 深色模式切换
 - 深色模式仅保存在浏览器本地，不会写入服务端用户资料
 
-### 4. 登录态维护
+### 5. 登录态维护
 
 当前版本已经把“账号 Cookie 是否有效”从单纯检测升级为一条完整维护链路：
 
@@ -128,7 +179,7 @@ docker compose up -d --build
 - `刷新 Cookie` 已明确表示“重新扫码登录”，不是自动续期接口
 - 如果历史账号缺少 `stoken` 或 `mid`，当前实现不会隐式补救，而是直接提示“仅支持重新扫码”
 
-### 5. 签到链路差异
+### 6. 签到链路差异
 
 当前签到实现不是所有游戏都完全共用同一组接口参数：
 
@@ -146,9 +197,16 @@ docker compose up -d --build
 
 ## 常见问题
 
-### 1. `/api/tasks/execute` 返回 500
+### 1. 旧 SQLite 升级到新版本后怎么迁到 MySQL
 
-如果是从旧版本直接升级，旧 SQLite 库里可能没有 `system_settings` 表。当前版本已经在后端做了自动补建兼容，但前提是服务进程已经更新到最新代码并完成重启。
+不要把旧 SQLite 文件直接挂到新版本后端继续跑。当前默认部署目标是 MySQL 8，正确方式是：
+
+- 先启动 MySQL
+- 执行 `scripts/migrate_sqlite_to_mysql.py`
+- 确认迁移校验通过
+- 再启动后端和前端
+
+迁移脚本在任意一步失败时会整批回滚核心数据，因此修复问题后可以直接重跑；不应再出现“半迁移成功后必须手工清库”的流程。
 
 ### 2. 签到状态失败或提示维护中
 
@@ -231,7 +289,7 @@ cd backend
 - Cookie 校验与自动续期状态流转
 - `reauth_required` 邮件通知去重
 - 账号列表新字段与手动维护接口
-- 旧 SQLite 库自动补列
+- SQLite 核心数据迁移到新库的约束与校验
 
 前端：
 
@@ -248,7 +306,7 @@ npm run build
 
 ## 维护提示
 
-- 本项目当前没有 Alembic 迁移，新增表结构时要特别注意旧 SQLite 库的兼容升级路径
+- 当前生产默认以 MySQL 8 为准；如果需要从 SQLite 升级，请走显式迁移脚本，不要再依赖“重启后自动补列”
 - 登录态维护依赖 `stoken / stuid / mid`；后续若调整扫码登录或 Cookie 存储逻辑，必须同步验证自动续期是否还能成立
 - 账号进入 `reauth_required` 后，通知和 UI 都要保持“明确但不过度惊扰”的语义，避免一边高频发信、一边在页面里堆原始错误文本
 - 签到链路不要随意删减设备参数、`DS` 或风控延迟，这些机制必须成套存在

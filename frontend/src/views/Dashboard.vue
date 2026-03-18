@@ -152,7 +152,11 @@
                     </div>
                   </div>
 
-                  <div v-if="card.status !== 'available'" class="note-error">
+                  <div
+                    v-if="card.status !== 'available'"
+                    class="note-notice"
+                    :class="`note-notice-${getNoteNoticeTone(card.status)}`"
+                  >
                     <el-icon><Warning /></el-icon>
                     <span>{{ card.message || '当前无法获取便笺信息' }}</span>
                   </div>
@@ -244,6 +248,11 @@ import { ElMessage } from 'element-plus'
 import { logApi, notesApi, taskApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
+import {
+  getNoteNoticeTone,
+  getNoteStatusText,
+  getNoteStatusType,
+} from '../utils/noteStatus'
 
 type NoteAccount = {
   id: number
@@ -312,18 +321,6 @@ function formatNoteAccountLabel(account: NoteAccount) {
   const primary = account.nickname || account.mihoyo_uid || `账号 #${account.id}`
   const games = account.supported_games.join(' / ')
   return `${primary}${games ? ` · ${games}` : ''}`
-}
-
-function getNoteStatusText(statusText: string) {
-  if (statusText === 'available') return '可用'
-  if (statusText === 'invalid_cookie') return '登录失效'
-  return '查询失败'
-}
-
-function getNoteStatusType(statusText: string) {
-  if (statusText === 'available') return 'success'
-  if (statusText === 'invalid_cookie') return 'warning'
-  return 'danger'
 }
 
 function resetNoteSummary() {
@@ -722,15 +719,23 @@ onMounted(loadData)
   white-space: nowrap;
 }
 
-.note-error {
+.note-notice {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 14px 16px;
   border-radius: 16px;
+  line-height: 1.6;
+}
+
+.note-notice-error {
   background: rgba(248, 113, 113, 0.08);
   color: #b91c1c;
-  line-height: 1.6;
+}
+
+.note-notice-warning {
+  background: rgba(251, 191, 36, 0.12);
+  color: #b45309;
 }
 
 .note-metrics {

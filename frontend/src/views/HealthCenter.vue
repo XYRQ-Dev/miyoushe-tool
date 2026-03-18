@@ -44,11 +44,11 @@
         <div class="filter-group">
           <span class="filter-label">筛选</span>
           <el-radio-group v-model="levelFilter" size="small">
-            <el-radio-button label="all">全部</el-radio-button>
-            <el-radio-button label="danger">危险</el-radio-button>
-            <el-radio-button label="warning">预警</el-radio-button>
-            <el-radio-button label="healthy">健康</el-radio-button>
-            <el-radio-button label="unknown">待判定</el-radio-button>
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="danger">危险</el-radio-button>
+            <el-radio-button value="warning">预警</el-radio-button>
+            <el-radio-button value="healthy">健康</el-radio-button>
+            <el-radio-button value="unknown">待判定</el-radio-button>
           </el-radio-group>
         </div>
 

@@ -3,7 +3,6 @@
 通过环境变量或 .env 文件加载配置，敏感信息不硬编码
 """
 
-import os
 import secrets
 from pydantic_settings import BaseSettings
 
@@ -20,8 +19,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 小时
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # 数据库路径
-    DATABASE_URL: str = "sqlite+aiosqlite:///./data/miyoushe.db"
+    # 数据库连接串
+    # 默认值必须优先照顾“本机直接启动后端”的场景，因此这里使用 127.0.0.1，
+    # 不能写 Docker Compose 内部服务名 `mysql`。否则开发者按 README 本地运行 uvicorn 时，
+    # 会在没有容器内 DNS 的情况下直接因为主机名不存在而启动失败。
+    # 容器部署再通过 docker-compose 显式覆盖成 `@mysql:3306`。
+    DATABASE_URL: str = "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
     # Cookie 加密密钥（AES-256，必须 32 字节 base64）
     ENCRYPTION_KEY: str = secrets.token_urlsafe(32)

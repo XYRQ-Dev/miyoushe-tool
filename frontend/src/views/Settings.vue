@@ -219,6 +219,8 @@ const emailSettingsForm = reactive({
 })
 
 async function loadSettings() {
+  await userStore.ensureUserInfoLoaded()
+
   // 加载用户信息
   if (userStore.userInfo) {
     userForm.email = userStore.userInfo.email || ''

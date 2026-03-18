@@ -1,5 +1,8 @@
+import os
 import unittest
 from unittest.mock import patch
+
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -274,3 +277,96 @@ class NoteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(response.available_cards, 1)
         self.assertEqual(response.cards[0].status, "available")
+
+    async def test_get_realtime_notes_maps_upstream_verification_codes_to_actionable_status(self):
+        from app.api.notes import get_realtime_notes
+
+        user, account = await self._seed_account()
+
+        async with await self._new_session() as session:
+            session.add_all([
+                GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", nickname="旅行者", region="cn_gf01"),
+                GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="20001", nickname="开拓者", region="prod_gf_cn"),
+            ])
+            await session.commit()
+
+            payloads = {
+                "/genshin/api/dailyNote": {
+                    "retcode": 5003,
+                    "message": "",
+                    "data": None,
+                },
+                "/hkrpg/api/note": {
+                    "retcode": 10041,
+                    "message": "",
+                    "data": None,
+                },
+            }
+
+            with patch("app.services.notes.httpx.AsyncClient", return_value=FakeAsyncClient(payloads)):
+                response = await get_realtime_notes(account_id=account.id, current_user=user, db=session)
+
+        self.assertEqual(response.total_cards, 2)
+        self.assertEqual(response.available_cards, 0)
+        self.assertEqual(response.failed_cards, 2)
+        self.assertEqual({card.status for card in response.cards}, {"verification_required"})
+        self.assertTrue(all("验证" in (card.message or "") for card in response.cards))
+
+    async def test_get_realtime_notes_does_not_map_cross_game_verification_codes(self):
+        from app.api.notes import get_realtime_notes
+
+        user, account = await self._seed_account()
+
+        async with await self._new_session() as session:
+            session.add_all([
+                GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", nickname="旅行者", region="cn_gf01"),
+                GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="20001", nickname="开拓者", region="prod_gf_cn"),
+            ])
+            await session.commit()
+
+            payloads = {
+                "/genshin/api/dailyNote": {
+                    "retcode": 10041,
+                    "message": "genshin-wrong-code",
+                    "data": None,
+                },
+                "/hkrpg/api/note": {
+                    "retcode": 5003,
+                    "message": "starrail-wrong-code",
+                    "data": None,
+                },
+            }
+
+            with patch("app.services.notes.httpx.AsyncClient", return_value=FakeAsyncClient(payloads)):
+                response = await get_realtime_notes(account_id=account.id, current_user=user, db=session)
+
+        status_by_game = {card.game: card.status for card in response.cards}
+        message_by_game = {card.game: card.message for card in response.cards}
+        self.assertEqual(status_by_game, {"genshin": "error", "starrail": "error"})
+        self.assertEqual(message_by_game["genshin"], "genshin-wrong-code")
+        self.assertEqual(message_by_game["starrail"], "starrail-wrong-code")
+
+    async def test_get_realtime_notes_keeps_unknown_retcode_as_error(self):
+        from app.api.notes import get_realtime_notes
+
+        user, account = await self._seed_account()
+
+        async with await self._new_session() as session:
+            session.add(
+                GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", nickname="旅行者", region="cn_gf01")
+            )
+            await session.commit()
+
+            payloads = {
+                "/genshin/api/dailyNote": {
+                    "retcode": 12345,
+                    "message": "unexpected-upstream-error",
+                    "data": None,
+                },
+            }
+
+            with patch("app.services.notes.httpx.AsyncClient", return_value=FakeAsyncClient(payloads)):
+                response = await get_realtime_notes(account_id=account.id, current_user=user, db=session)
+
+        self.assertEqual(response.cards[0].status, "error")
+        self.assertEqual(response.cards[0].message, "unexpected-upstream-error")
