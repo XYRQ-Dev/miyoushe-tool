@@ -134,6 +134,11 @@ export const notesApi = {
   getSummary: (params: { account_id: number }) => api.get('/notes/summary', { params }),
 }
 
+// ===== 账号健康中心 API =====
+export const healthCenterApi = {
+  getOverview: () => api.get('/health-center/overview'),
+}
+
 // ===== 兑换码中心 API =====
 // 这一组接口由后端兑换码中心提供，前端统一在此封装以便不同页面共享流水操作与批次列表
 export const redeemApi = {

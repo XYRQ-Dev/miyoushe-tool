@@ -81,6 +81,7 @@ app.add_middleware(
 from app.api.auth import router as auth_router
 from app.api.accounts import router as accounts_router
 from app.api.gacha import router as gacha_router
+from app.api.health_center import router as health_center_router
 from app.api.redeem import router as redeem_router
 from app.api.notes import router as notes_router
 from app.api.tasks import router as tasks_router
@@ -90,6 +91,7 @@ from app.api.admin import router as admin_router
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(gacha_router)
+app.include_router(health_center_router)
 app.include_router(redeem_router)
 app.include_router(notes_router)
 app.include_router(tasks_router)

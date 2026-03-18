@@ -311,10 +311,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Lightning, Refresh } from '@element-plus/icons-vue'
 import { redeemApi } from '../api'
 import { getGameName } from '../constants/game'
+import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
 
 type GameOption = { value: string; label: string }
 
@@ -371,6 +373,8 @@ const accountsLoading = ref(false)
 const batchesLoading = ref(false)
 const detailLoading = ref(false)
 const executing = ref(false)
+const route = useRoute()
+const routeAccountPrefillConsumed = ref(false)
 
 const gameOptions = computed(() => GAME_OPTIONS)
 
@@ -428,6 +432,36 @@ function syncSelectedAccounts() {
   selectedAccountIds.value = selectedAccountIds.value.filter((accountId) => allowedIds.has(accountId))
 }
 
+function applyPreferredAccountSelection() {
+  const prefillResult = resolveRouteAccountPrefill(route.query.account_id, {
+    consumed: routeAccountPrefillConsumed.value,
+    availableAccountIds: accounts.value.map((account) => account.id),
+  })
+  routeAccountPrefillConsumed.value = prefillResult.consumed
+  if (prefillResult.preferredAccountId === null) {
+    syncSelectedAccounts()
+    return
+  }
+
+  const preferredAccount = accounts.value.find((account) => account.id === prefillResult.preferredAccountId)
+  if (!preferredAccount) {
+    syncSelectedAccounts()
+    return
+  }
+
+  if (!preferredAccount.supported_games.includes(selectedGame.value)) {
+    selectedGame.value = preferredAccount.supported_games[0] || selectedGame.value
+  }
+
+  if (preferredAccount.supported_games.includes(selectedGame.value)) {
+    // 从健康中心跳进兑换页时默认只保留目标账号，避免沿用历史批量勾选误发兑换请求。
+    selectedAccountIds.value = [prefillResult.preferredAccountId]
+    return
+  }
+
+  syncSelectedAccounts()
+}
+
 async function loadAccounts() {
   accountsLoading.value = true
   try {
@@ -438,7 +472,7 @@ async function loadAccounts() {
       const firstSupportedGame = accounts.value.find((account) => account.supported_games.length)?.supported_games[0]
       selectedGame.value = firstSupportedGame || 'genshin'
     }
-    syncSelectedAccounts()
+    applyPreferredAccountSelection()
   } catch (error) {
     // 账号源失败时直接清空本地状态，避免用户继续对旧账号集合做批量操作。
     accounts.value = []

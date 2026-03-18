@@ -247,9 +247,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, useTemplateRef } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload } from '@element-plus/icons-vue'
 import { gachaApi } from '../api'
+import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
 
 type GameOption = { value: string; label: string }
 type GachaAccount = { id: number; nickname?: string; mihoyo_uid?: string; supported_games: string[] }
@@ -276,6 +278,8 @@ const pageSize = 20
 const poolFilter = ref<string | undefined>()
 const latestImportMessage = ref('尚未执行导入')
 const jsonFileInput = useTemplateRef<HTMLInputElement>('jsonFileInput')
+const route = useRoute()
+const routeAccountPrefillConsumed = ref(false)
 
 const currentAccount = computed(() => (
   accounts.value.find((account) => account.id === selectedAccountId.value) || null
@@ -314,7 +318,15 @@ async function loadAccounts() {
   const { data } = await gachaApi.getAccounts()
   accounts.value = data.accounts || []
 
-  if (!selectedAccountId.value && accounts.value.length) {
+  const prefillResult = resolveRouteAccountPrefill(route.query.account_id, {
+    consumed: routeAccountPrefillConsumed.value,
+    availableAccountIds: accounts.value.map((account) => account.id),
+  })
+  routeAccountPrefillConsumed.value = prefillResult.consumed
+  if (prefillResult.preferredAccountId !== null) {
+    // 聚合页跳转到抽卡中心时优先使用 query 传入的账号，保证落地页上下文一致。
+    selectedAccountId.value = prefillResult.preferredAccountId
+  } else if (!selectedAccountId.value && accounts.value.length) {
     selectedAccountId.value = accounts.value[0].id
   }
 

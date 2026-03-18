@@ -37,6 +37,10 @@
           <el-icon><Collection /></el-icon>
           <template #title>抽卡记录</template>
         </el-menu-item>
+        <el-menu-item index="/health">
+          <el-icon><Warning /></el-icon>
+          <template #title>账号健康中心</template>
+        </el-menu-item>
         <el-menu-item index="/redeem">
           <el-icon><Ticket /></el-icon>
           <template #title>兑换码中心</template>
@@ -114,7 +118,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   Star, Odometer, User, UserFilled, Document, Setting, Collection,
-  Expand, Fold, ArrowDown, SwitchButton, Sunny, Moon, Ticket,
+  Expand, Fold, ArrowDown, SwitchButton, Sunny, Moon, Ticket, Warning,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 
@@ -132,6 +136,7 @@ const pageTitle = computed(() => {
     '/logs': '签到日志',
     '/admin/users': '用户信息列表',
     '/gacha': '抽卡记录',
+    '/health': '账号健康中心',
     '/redeem': '兑换码中心',
     '/settings': '系统设置',
   }

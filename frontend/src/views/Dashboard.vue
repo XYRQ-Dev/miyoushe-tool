@@ -236,12 +236,14 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   User, CircleCheck, CircleClose, Warning, Refresh,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { logApi, notesApi, taskApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
+import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
 
 type NoteAccount = {
   id: number
@@ -278,10 +280,12 @@ const calendar = ref<any[]>([])
 const checkinResults = ref<any[]>([])
 const summary = ref({ success: 0, failed: 0, already_signed: 0, risk: 0, total: 0 })
 const executing = ref(false)
+const route = useRoute()
 
 const noteAccounts = ref<NoteAccount[]>([])
 const selectedNoteAccountId = ref<number | null>(null)
 const notesLoading = ref(false)
+const routeAccountPrefillConsumed = ref(false)
 const noteSummary = ref({
   account_id: 0,
   account_name: '',
@@ -368,14 +372,24 @@ async function loadNotesPanel() {
     const { data } = await notesApi.getAccounts()
     noteAccounts.value = data.accounts || []
 
+    const prefillResult = resolveRouteAccountPrefill(route.query.account_id, {
+      consumed: routeAccountPrefillConsumed.value,
+      availableAccountIds: noteAccounts.value.map((account) => account.id),
+    })
+    routeAccountPrefillConsumed.value = prefillResult.consumed
+
     if (!noteAccounts.value.length) {
+      // 即使当前还没有可用账号，也必须在首次落地时消费掉 query 上下文，
+      // 否则用户稍后导入账号或刷新页面时，旧 account_id 会再次覆盖页面内手动选择。
       selectedNoteAccountId.value = null
       resetNoteSummary()
       return
     }
 
-    const selectedStillExists = noteAccounts.value.some((account) => account.id === selectedNoteAccountId.value)
-    if (!selectedStillExists) {
+    if (prefillResult.preferredAccountId !== null) {
+      // 允许健康中心等聚合页把账号上下文直接带入首页便笺面板，避免跨页后二次选择。
+      selectedNoteAccountId.value = prefillResult.preferredAccountId
+    } else if (!noteAccounts.value.some((account) => account.id === selectedNoteAccountId.value)) {
       selectedNoteAccountId.value = noteAccounts.value[0].id
     }
 

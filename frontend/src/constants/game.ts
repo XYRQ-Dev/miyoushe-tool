@@ -8,6 +8,8 @@ export const GAME_NAME_MAP: Record<string, string> = {
   hk4e_bilibili: '原神(B服)',
   hkrpg_cn: '星穹铁道',
   hkrpg_bilibili: '星铁(B服)',
+  honkai3rd: '崩坏3',
+  zenless: '绝区零',
   nap_cn: '绝区零',
   bh3_cn: '崩坏3',
   bh2_cn: '崩坏学园2',
