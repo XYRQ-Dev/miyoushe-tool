@@ -35,6 +35,12 @@ const router = createRouter({
           name: 'GachaRecords',
           component: () => import('../views/GachaRecords.vue'),
         },
+        // 兑换码中心功能入口
+        {
+          path: 'redeem',
+          name: 'RedeemCodes',
+          component: () => import('../views/RedeemCodes.vue'),
+        },
         {
           path: 'settings',
           name: 'Settings',

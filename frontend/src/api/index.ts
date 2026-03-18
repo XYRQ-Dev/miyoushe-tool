@@ -134,4 +134,14 @@ export const notesApi = {
   getSummary: (params: { account_id: number }) => api.get('/notes/summary', { params }),
 }
 
+// ===== 兑换码中心 API =====
+// 这一组接口由后端兑换码中心提供，前端统一在此封装以便不同页面共享流水操作与批次列表
+export const redeemApi = {
+  listAccounts: () => api.get('/redeem/accounts'),
+  execute: (data: { game: string; code: string; account_ids: number[] }) =>
+    api.post('/redeem/execute', data),
+  listBatches: (params?: Record<string, any>) => api.get('/redeem/batches', { params }),
+  getBatch: (id: number) => api.get(`/redeem/batches/${id}`),
+}
+
 export default api

@@ -39,6 +39,7 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await ensure_account_columns(engine)
+    await ensure_redeem_columns(engine)
 
 
 async def ensure_account_columns(target_engine: AsyncEngine) -> None:
@@ -75,4 +76,32 @@ async def ensure_account_columns(target_engine: AsyncEngine) -> None:
                 continue
             await conn.exec_driver_sql(
                 f"ALTER TABLE mihoyo_accounts ADD COLUMN {column_name} {column_type}"
+            )
+
+
+async def ensure_redeem_columns(target_engine: AsyncEngine) -> None:
+    """
+    为旧版本 SQLite 库补齐 `redeem_batches` 的新增统计字段。
+
+    兑换码中心当前同样没有 Alembic；若已有实例先创建过旧表，再直接升级代码，
+    ORM 读取 `RedeemBatch.error_count` 时会因为缺列直接失败，批次列表和详情都会不可用。
+    """
+    columns_to_add = {
+        "error_count": "INTEGER DEFAULT 0",
+    }
+
+    async with target_engine.begin() as conn:
+        if conn.dialect.name != "sqlite":
+            return
+
+        result = await conn.exec_driver_sql("PRAGMA table_info(redeem_batches)")
+        existing_columns = {row[1] for row in result.fetchall()}
+        if not existing_columns:
+            return
+
+        for column_name, column_type in columns_to_add.items():
+            if column_name in existing_columns:
+                continue
+            await conn.exec_driver_sql(
+                f"ALTER TABLE redeem_batches ADD COLUMN {column_name} {column_type}"
             )

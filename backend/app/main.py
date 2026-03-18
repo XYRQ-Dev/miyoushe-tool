@@ -81,6 +81,7 @@ app.add_middleware(
 from app.api.auth import router as auth_router
 from app.api.accounts import router as accounts_router
 from app.api.gacha import router as gacha_router
+from app.api.redeem import router as redeem_router
 from app.api.notes import router as notes_router
 from app.api.tasks import router as tasks_router
 from app.api.logs import router as logs_router
@@ -89,6 +90,7 @@ from app.api.admin import router as admin_router
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(gacha_router)
+app.include_router(redeem_router)
 app.include_router(notes_router)
 app.include_router(tasks_router)
 app.include_router(logs_router)
@@ -241,10 +243,12 @@ async def qr_login_websocket(
 
     except WebSocketDisconnect:
         logger.info(f"[{session_id}] WebSocket 连接断开")
-    except Exception as e:
-        logger.error(f"[{session_id}] WebSocket 错误: {e}")
+    except Exception:
+        # WebSocket 异常日志里可能带浏览器环境、Cookie 处理细节或路径信息，不能直接透传到前端。
+        # 保留完整服务端堆栈用于排障，同时给用户固定提示，避免内部实现细节泄露。
+        logger.exception("[%s] WebSocket 错误", session_id)
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.send_json({"type": "error", "message": "二维码登录通道异常，请关闭页面后重试"})
         except Exception:
             pass
     finally:
