@@ -21,6 +21,7 @@ from app.services.menu_visibility import (
     APP_MENU_DEFINITIONS,
     GUARDED_ADMIN_MENU_KEY,
     MENU_DEFINITION_MAP,
+    is_menu_visible_for_role,
     normalize_menu_visibility,
     serialize_menu_visibility,
 )
@@ -212,6 +213,7 @@ class SystemSettingsService:
                     user_visible=normalized[item.key]["user"],
                     admin_visible=normalized[item.key]["admin"],
                     editable=item.editable,
+                    navigable=item.navigable,
                 )
                 for item in APP_MENU_DEFINITIONS
             ]
@@ -236,3 +238,18 @@ class SystemSettingsService:
         await self.db.commit()
         await self.db.refresh(config)
         return await self.get_menu_visibility()
+
+    async def is_menu_visible_for_role(self, *, menu_key: str, role: str) -> bool:
+        """
+        在系统配置上下文里判断指定功能是否对当前角色开放。
+
+        Notes API 需要在真正进入业务链路前就做统一拦截；若每个接口各自查表、各自解析，
+        很容易把“默认值补齐”“旧库脏数据兜底”“管理员保底菜单规则”实现出多份，
+        后续某一处漏同步时就会出现权限判断不一致。
+        """
+        config = await self.get_or_create()
+        return is_menu_visible_for_role(
+            menu_key=menu_key,
+            role=role,
+            raw_value=config.menu_visibility_json,
+        )

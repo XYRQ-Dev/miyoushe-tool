@@ -1,15 +1,17 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models.account import GameRole, MihoyoAccount
 from app.models.user import User
+from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import encrypt_cookie
 
 
@@ -57,9 +59,9 @@ class NoteTests(unittest.IsolatedAsyncioTestCase):
     async def _new_session(self):
         return self.session_factory()
 
-    async def _seed_account(self, *, cookie_status: str = "valid", with_cookie: bool = True):
+    async def _seed_account(self, *, role: str = "user", cookie_status: str = "valid", with_cookie: bool = True):
         async with await self._new_session() as session:
-            user = User(username="note-user", password_hash="x", role="user", is_active=True)
+            user = User(username=f"note-{role}-user", password_hash="x", role=role, is_active=True)
             session.add(user)
             await session.flush()
 
@@ -76,6 +78,18 @@ class NoteTests(unittest.IsolatedAsyncioTestCase):
             await session.refresh(user)
             await session.refresh(account)
             return user, account
+
+    async def _disable_notes_menu(self, *, session: AsyncSession, user_visible: bool, admin_visible: bool):
+        config = await SystemSettingsService(session).get_or_create()
+        config.menu_visibility_json = (
+            '{"notes":{"user":'
+            + ("true" if user_visible else "false")
+            + ',"admin":'
+            + ("true" if admin_visible else "false")
+            + "}}"
+        )
+        session.add(config)
+        await session.commit()
 
     async def test_get_note_accounts_only_returns_supported_accounts(self):
         from app.api.notes import get_note_accounts
@@ -141,6 +155,23 @@ class NoteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.total, 1)
         self.assertEqual(response.accounts[0].nickname, "启用角色账号")
+
+    async def test_get_note_accounts_returns_403_when_notes_disabled(self):
+        from app.api.notes import get_note_accounts
+
+        user, _ = await self._seed_account(role="user")
+
+        async with await self._new_session() as session:
+            await self._disable_notes_menu(session=session, user_visible=False, admin_visible=False)
+
+            mock_list_supported_accounts = AsyncMock()
+            with patch("app.api.notes.NoteService.list_supported_accounts", mock_list_supported_accounts):
+                with self.assertRaises(HTTPException) as ctx:
+                    await get_note_accounts(current_user=user, db=session)
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("实时便笺功能已被管理员禁用", ctx.exception.detail)
+        mock_list_supported_accounts.assert_not_awaited()
 
     async def test_get_realtime_notes_returns_normalized_cards_for_supported_roles(self):
         from app.api.notes import get_realtime_notes
@@ -370,3 +401,25 @@ class NoteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.cards[0].status, "error")
         self.assertEqual(response.cards[0].message, "unexpected-upstream-error")
+
+    async def test_get_realtime_notes_returns_403_for_admin_when_notes_disabled(self):
+        from app.api.notes import get_realtime_notes
+
+        admin, account = await self._seed_account(role="admin")
+
+        async with await self._new_session() as session:
+            await self._disable_notes_menu(session=session, user_visible=False, admin_visible=False)
+
+            mock_get_owned_account = AsyncMock()
+            mock_get_summary = AsyncMock()
+            with patch("app.api.notes.NoteService.get_owned_account", mock_get_owned_account), patch(
+                "app.api.notes.NoteService.get_summary",
+                mock_get_summary,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    await get_realtime_notes(account_id=account.id, current_user=admin, db=session)
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("实时便笺功能已被管理员禁用", ctx.exception.detail)
+        mock_get_owned_account.assert_not_awaited()
+        mock_get_summary.assert_not_awaited()

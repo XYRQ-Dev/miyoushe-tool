@@ -55,7 +55,7 @@
       <el-button :icon="Refresh" @click="loadData" round>刷新</el-button>
     </div>
 
-    <section class="notes-panel">
+    <section v-if="hasNotesAccess" class="notes-panel">
       <div class="notes-shell">
         <div class="notes-hero">
           <div class="notes-copy">
@@ -247,7 +247,9 @@ import {
 import { ElMessage } from 'element-plus'
 import { logApi, notesApi, taskApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
+import { useUserStore } from '../stores/user'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
+import { hasMenuAccess } from '../utils/menuVisibility'
 import {
   getNoteNoticeTone,
   getNoteStatusText,
@@ -290,6 +292,7 @@ const checkinResults = ref<any[]>([])
 const summary = ref({ success: 0, failed: 0, already_signed: 0, risk: 0, total: 0 })
 const executing = ref(false)
 const route = useRoute()
+const userStore = useUserStore()
 
 const noteAccounts = ref<NoteAccount[]>([])
 const selectedNoteAccountId = ref<number | null>(null)
@@ -305,6 +308,7 @@ const noteSummary = ref({
 })
 
 const noteCards = computed(() => noteSummary.value.cards || [])
+const hasNotesAccess = computed(() => hasMenuAccess('notes', userStore.visibleMenuKeys))
 
 const summaryType = computed(() => {
   if (summary.value.failed > 0) return 'danger'
@@ -332,6 +336,16 @@ function resetNoteSummary() {
     failed_cards: 0,
     cards: [],
   }
+}
+
+function resetNotesPanelState() {
+  // 功能开关关闭时必须主动清空前端便笺状态，而不能只依赖 v-if 隐藏视图；
+  // 否则上一次已加载的账号、卡片和汇总数据会残留在内存里，后续排查“明明关闭了 why 还有旧便笺数据”时会产生误导。
+  noteAccounts.value = []
+  selectedNoteAccountId.value = null
+  routeAccountPrefillConsumed.value = false
+  notesLoading.value = false
+  resetNoteSummary()
 }
 
 async function loadDashboardSummary() {
@@ -392,9 +406,7 @@ async function loadNotesPanel() {
 
     await loadNotesSummary()
   } catch (e) {
-    noteAccounts.value = []
-    selectedNoteAccountId.value = null
-    resetNoteSummary()
+    resetNotesPanelState()
   } finally {
     notesLoading.value = false
   }
@@ -410,10 +422,13 @@ async function handleNoteAccountChange() {
 }
 
 async function loadData() {
-  await Promise.all([
-    loadDashboardSummary(),
-    loadNotesPanel(),
-  ])
+  await loadDashboardSummary()
+
+  if (hasNotesAccess.value) {
+    await loadNotesPanel()
+  } else {
+    resetNotesPanelState()
+  }
 }
 
 async function handleExecute() {

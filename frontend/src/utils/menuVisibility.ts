@@ -2,7 +2,7 @@ import { APP_MENUS, type AppMenuDefinition, type AppMenuKey } from '../constants
 
 export function getVisibleMenus(visibleMenuKeys: string[]): AppMenuDefinition[] {
   const visibleSet = new Set(visibleMenuKeys)
-  return APP_MENUS.filter((item) => visibleSet.has(item.key))
+  return APP_MENUS.filter((item) => visibleSet.has(item.key) && item.navigable !== false)
 }
 
 export function hasMenuAccess(menuKey: AppMenuKey | string | undefined, visibleMenuKeys: string[]): boolean {

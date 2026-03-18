@@ -34,6 +34,7 @@ class AdminMenuVisibilityItem(BaseModel):
     user_visible: bool
     admin_visible: bool
     editable: bool
+    navigable: bool
 
 
 class AdminMenuVisibilityResponse(BaseModel):

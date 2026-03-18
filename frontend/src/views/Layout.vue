@@ -102,6 +102,7 @@ const userStore = useUserStore()
 const isCollapse = ref(false)
 const menuIconMap: Record<AppMenuKey, unknown> = {
   dashboard: Odometer,
+  notes: Odometer,
   accounts: User,
   logs: Document,
   gacha: Collection,
@@ -114,7 +115,7 @@ const menuIconMap: Record<AppMenuKey, unknown> = {
 }
 
 const activeMenu = computed(() => route.path)
-const visibleMenus = computed(() => getVisibleMenus(userStore.visibleMenuKeys))
+const visibleMenus = computed(() => getVisibleMenus(userStore.visibleMenuKeys).filter((item) => item.navigable !== false))
 const settingsVisible = computed(() => hasMenuAccess('settings', userStore.visibleMenuKeys))
 
 const pageTitle = computed(() => {

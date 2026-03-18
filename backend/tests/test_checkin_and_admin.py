@@ -117,6 +117,7 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(registered.visible_menu_keys, me.visible_menu_keys)
         self.assertIn("dashboard", registered.visible_menu_keys)
+        self.assertIn("notes", registered.visible_menu_keys)
         self.assertIn("admin_users", registered.visible_menu_keys)
         self.assertIn("admin_menu_management", registered.visible_menu_keys)
 
@@ -1870,9 +1871,11 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             user_response = await get_me(current_user=user, db=session)
 
         self.assertIn("dashboard", admin_response.visible_menu_keys)
+        self.assertIn("notes", admin_response.visible_menu_keys)
         self.assertIn("admin_users", admin_response.visible_menu_keys)
         self.assertIn("admin_menu_management", admin_response.visible_menu_keys)
         self.assertIn("dashboard", user_response.visible_menu_keys)
+        self.assertIn("notes", user_response.visible_menu_keys)
         self.assertNotIn("admin_users", user_response.visible_menu_keys)
         self.assertNotIn("admin_menu_management", user_response.visible_menu_keys)
 
@@ -1902,6 +1905,7 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         by_key = {item.key: item for item in updated.items}
         self.assertFalse(by_key["gacha"].user_visible)
         self.assertFalse(by_key["admin_users"].admin_visible)
+        self.assertFalse(by_key["notes"].navigable)
         self.assertTrue(by_key["admin_menu_management"].admin_visible)
         self.assertFalse(by_key["admin_menu_management"].editable)
         self.assertEqual(len(read_back.items), len(updated.items))
@@ -1909,6 +1913,19 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("gacha", admin_response.visible_menu_keys)
         self.assertNotIn("admin_users", admin_response.visible_menu_keys)
         self.assertIn("admin_menu_management", admin_response.visible_menu_keys)
+
+    async def test_get_menu_visibility_exposes_notes_path_as_module_placeholder(self):
+        async with await self._new_session() as session:
+            admin = User(username="notes-path-admin", password_hash="x", role="admin", is_active=True)
+            session.add(admin)
+            await session.commit()
+            await session.refresh(admin)
+
+            response = await get_menu_visibility(admin=admin, db=session)
+
+        by_key = {item.key: item for item in response.items}
+        self.assertEqual(by_key["notes"].path, "[module] dashboard-notes")
+        self.assertFalse(by_key["notes"].navigable)
 
     async def test_update_menu_visibility_rejects_unknown_or_guarded_keys(self):
         async with await self._new_session() as session:
