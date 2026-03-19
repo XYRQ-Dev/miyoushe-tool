@@ -1,5 +1,13 @@
 <template>
-  <div class="dashboard">
+  <div class="app-page dashboard">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">Operational Surface</div>
+        <h2 class="page-title">仪表盘</h2>
+        <p class="page-desc">快速查看今日签到状态，并按账号查看实时便笺信息。</p>
+      </div>
+    </section>
+
     <div class="stat-cards">
       <div class="stat-card" style="--accent: #2563eb">
         <div class="stat-icon">
@@ -62,8 +70,7 @@
             <p class="notes-kicker">Realtime Notes</p>
             <h3>实时便笺面板</h3>
             <p class="notes-desc">
-              在仪表盘直接查看体力、委托和资源恢复情况。首版聚合原神与星穹铁道角色状态，
-              让首页从“只看签到”升级为“顺手看资产”。
+              在首页直接查看体力、委托和资源恢复情况，方便你在签到之外顺手确认角色状态。
             </p>
           </div>
           <div class="notes-summary">
@@ -112,7 +119,7 @@
             <template #default>
               <el-empty
                 v-if="!noteAccounts.length"
-                description="当前还没有支持实时便笺的账号，先完成一次账号导入"
+                description="还没有可查看便笺的账号，先导入一个账号"
                 :image-size="84"
               />
               <el-empty
@@ -158,7 +165,7 @@
                     :class="`note-notice-${getNoteNoticeTone(card.status)}`"
                   >
                     <el-icon><Warning /></el-icon>
-                    <span>{{ card.message || '当前无法获取便笺信息' }}</span>
+                    <span>{{ card.message || '暂时无法获取便笺信息' }}</span>
                   </div>
 
                   <div v-else class="note-metrics">
@@ -170,7 +177,7 @@
                     >
                       <div class="note-metric-label">{{ metric.label }}</div>
                       <div class="note-metric-value">{{ metric.value }}</div>
-                      <div class="note-metric-detail">{{ metric.detail || '当前无额外说明' }}</div>
+                      <div class="note-metric-detail">{{ metric.detail || '暂无额外说明' }}</div>
                     </div>
                   </div>
                 </article>
@@ -451,8 +458,7 @@ onMounted(loadData)
 
 <style scoped>
 .dashboard {
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .stat-cards {

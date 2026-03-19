@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <h3>用户信息列表</h3>
-            <p>查看所有用户的基础资料与通知配置，并管理账号启用状态。</p>
+            <p>查看用户资料、通知设置和账号启用状态。</p>
           </div>
           <el-button :icon="Refresh" @click="loadUsers" :loading="loading" round>刷新</el-button>
         </div>

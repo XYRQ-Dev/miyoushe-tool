@@ -1,18 +1,14 @@
 <template>
-  <div class="health-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="hero-kicker">System Pulse</p>
-        <h3>账号健康中心</h3>
-        <p class="hero-desc">
-          把登录态、签到结果和资产入口收敛到一个中枢页面。这里优先告诉你哪些账号还能稳定运行，
-          哪些账号已经开始出问题，以及下一步应该去哪处理。
-        </p>
+  <div class="app-page health-page">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">System Pulse</div>
+        <h2 class="page-title">账号健康中心</h2>
+        <p class="page-desc">{{ headlineSubtitle }}</p>
       </div>
-      <div class="hero-meta">
-        <div class="hero-meta-label">当前重点</div>
-        <div class="hero-meta-value">{{ headlineTitle }}</div>
-        <div class="hero-meta-subtitle">{{ headlineSubtitle }}</div>
+      <div class="page-actions">
+        <div class="soft-chip">{{ headlineTitle }}</div>
+        <el-button :icon="Refresh" :loading="loading" @click="loadOverview">刷新</el-button>
       </div>
     </section>
 
@@ -20,7 +16,7 @@
       <div class="summary-card summary-card-primary">
         <div class="summary-label">绑定账号</div>
         <div class="summary-value">{{ overview.summary.total_accounts }}</div>
-        <div class="summary-note">当前已接入的米游社账号总数</div>
+        <div class="summary-note">已添加到系统中的账号总数</div>
       </div>
       <div class="summary-card">
         <div class="summary-label">健康账号</div>
@@ -39,7 +35,7 @@
       </div>
     </div>
 
-    <el-card class="filter-card" shadow="never">
+    <el-card class="filter-card filter-panel" shadow="never">
       <div class="filter-row">
         <div class="filter-group">
           <span class="filter-label">筛选</span>
@@ -70,7 +66,7 @@
       <template #default>
         <el-empty
           v-if="!overview.summary.total_accounts"
-          description="当前还没有可监控的账号，先完成一次账号导入"
+          description="还没有可查看状态的账号，先导入一个账号"
           :image-size="84"
         >
           <el-button type="primary" @click="router.push('/accounts')">前往账号管理</el-button>
@@ -78,7 +74,7 @@
 
         <el-empty
           v-else-if="!filteredAccounts.length"
-          description="当前筛选条件下没有匹配账号"
+          description="没有找到符合条件的账号"
           :image-size="84"
         />
 
@@ -134,7 +130,7 @@
                 </div>
               </div>
               <div class="info-card">
-                <div class="info-label">支持资产入口</div>
+                <div class="info-label">可用功能</div>
                 <div class="chip-group">
                   <span
                     v-for="asset in account.supported_assets"
@@ -144,7 +140,7 @@
                     {{ getAssetLabel(asset) }}
                   </span>
                   <span v-if="!account.supported_assets.length" class="asset-chip asset-chip-muted">
-                    暂无可用资产入口
+                    暂无可用功能
                   </span>
                 </div>
                 <div class="info-note">
@@ -200,7 +196,7 @@
       </template>
     </el-skeleton>
 
-    <el-card class="events-card" shadow="never">
+    <el-card class="events-card panel-card" shadow="never">
       <template #header>
         <div class="section-header">
           <div>
@@ -358,15 +354,15 @@ const headlineTitle = computed(() => {
 
 const headlineSubtitle = computed(() => {
   if (overview.value.summary.reauth_required_accounts > 0) {
-    return '优先处理需重登账号，避免后续签到、便笺和兑换链路继续失效。'
+    return '有账号需要重新登录，建议优先处理。'
   }
   if (overview.value.summary.warning_accounts > 0) {
-    return '当前存在近期失败签到或维护异常，建议先查看下方账号卡与异常流。'
+    return '有账号近期出现签到失败或维护异常，建议先查看下方详情。'
   }
   if (overview.value.summary.total_accounts > 0) {
-    return '当前所有账号都处于可运行状态，可以继续从资产页进入便笺、抽卡和兑换操作。'
+    return '所有账号目前状态正常，可继续使用相关功能。'
   }
-  return '先在账号管理里导入至少一个米游社账号，再回到这里看整体健康状态。'
+  return '先在账号管理中导入账号，再回来查看状态。'
 })
 
 function formatAccountName(account: HealthAccount) {
@@ -379,7 +375,7 @@ function formatDateTime(value?: string | null) {
 }
 
 function formatSupportedGames(games: string[]) {
-  if (!games.length) return '当前无可识别的游戏角色'
+  if (!games.length) return '暂无角色信息'
   return `覆盖 ${games.map((game) => getGameName(game)).join(' / ')}`
 }
 
@@ -501,74 +497,7 @@ onMounted(loadOverview)
 
 <style scoped>
 .health-page {
-  max-width: 1280px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.hero-panel {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: flex-start;
-  padding: 30px;
-  border-radius: 28px;
-  background:
-    radial-gradient(circle at top right, rgba(110, 231, 183, 0.28), transparent 34%),
-    radial-gradient(circle at left bottom, rgba(59, 130, 246, 0.2), transparent 32%),
-    linear-gradient(135deg, rgba(6, 78, 59, 0.96), rgba(15, 118, 110, 0.92));
-  color: #ecfeff;
-  box-shadow: 0 24px 52px rgba(15, 118, 110, 0.2);
-}
-
-.hero-kicker {
-  margin-bottom: 10px;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(204, 251, 241, 0.76);
-}
-
-.hero-copy h3 {
-  font-size: 30px;
-  font-weight: 700;
-}
-
-.hero-desc {
-  max-width: 760px;
-  margin-top: 12px;
-  line-height: 1.78;
-  color: rgba(236, 254, 255, 0.88);
-}
-
-.hero-meta {
-  min-width: 270px;
-  padding: 18px;
-  border-radius: 18px;
-  background: rgba(15, 118, 110, 0.22);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(12px);
-}
-
-.hero-meta-label {
-  font-size: 12px;
-  color: rgba(204, 251, 241, 0.72);
-}
-
-.hero-meta-value {
-  margin-top: 10px;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.45;
-}
-
-.hero-meta-subtitle {
-  margin-top: 10px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: rgba(236, 254, 255, 0.82);
+  width: 100%;
 }
 
 .summary-grid {
@@ -625,8 +554,7 @@ onMounted(loadOverview)
 
 .filter-card,
 .events-card {
-  border-radius: 20px;
-  border: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 .filter-row {
@@ -901,7 +829,6 @@ onMounted(loadOverview)
 }
 
 @media (max-width: 860px) {
-  .hero-panel,
   .filter-row,
   .filter-group,
   .filter-actions,
@@ -911,7 +838,6 @@ onMounted(loadOverview)
     align-items: flex-start;
   }
 
-  .hero-meta,
   .search-input {
     width: 100%;
   }

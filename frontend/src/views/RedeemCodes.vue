@@ -1,22 +1,18 @@
 <template>
-  <div class="redeem-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="hero-kicker">Code Control</p>
-        <h3>兑换码中心</h3>
-        <p class="hero-desc">
-          把看到兑换码、选账号执行、回看结果留痕收敛到一个页面。首版聚焦原神与星穹铁道，
-          支持按游戏筛选账号、批量执行和查看历史批次。
-        </p>
+  <div class="app-page redeem-page">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">Code Control</div>
+        <h2 class="page-title">兑换码中心</h2>
+        <p class="page-desc">选择游戏和账号后即可执行兑换，并查看最近批次结果。</p>
       </div>
-      <div class="hero-meta">
-        <div class="hero-meta-label">最近一批</div>
-        <div class="hero-meta-value">{{ latestBatchTitle }}</div>
-        <div class="hero-meta-subtitle">{{ latestBatchSummary }}</div>
+      <div class="page-actions">
+        <div class="soft-chip">{{ latestBatchTitle }}</div>
+        <div class="soft-chip">{{ latestBatchSummary }}</div>
       </div>
     </section>
 
-    <el-card class="control-card" shadow="never">
+    <el-card class="control-card panel-card" shadow="never">
       <template #header>
         <div class="section-header">
           <div>
@@ -165,7 +161,7 @@
     </div>
 
     <div class="content-grid">
-      <el-card class="history-card" shadow="never">
+    <el-card class="history-card panel-card" shadow="never">
         <template #header>
           <div class="section-header section-header-wrap">
             <div>
@@ -215,7 +211,7 @@
         </el-skeleton>
       </el-card>
 
-      <el-card class="detail-card" shadow="never">
+      <el-card class="detail-card panel-card" shadow="never">
         <template #header>
           <div class="section-header section-header-wrap">
             <div>
@@ -390,7 +386,7 @@ const latestBatchTitle = computed(() => {
 })
 
 const latestBatchSummary = computed(() => {
-  if (!latestBatch.value) return '执行后会在这里显示最近一次批次结果'
+  if (!latestBatch.value) return '执行后会显示最近一次结果'
   return `成功 ${latestBatch.value.success_count} / 重复 ${latestBatch.value.already_redeemed_count} / 失败 ${latestBatch.value.failed_count}`
 })
 
@@ -654,81 +650,13 @@ onMounted(refreshAll)
 
 <style scoped>
 .redeem-page {
-  max-width: 1280px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.hero-panel {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: flex-start;
-  padding: 30px;
-  border-radius: 26px;
-  background:
-    radial-gradient(circle at top right, rgba(251, 191, 36, 0.28), transparent 32%),
-    radial-gradient(circle at left bottom, rgba(248, 113, 113, 0.24), transparent 34%),
-    linear-gradient(135deg, rgba(120, 53, 15, 0.96), rgba(180, 83, 9, 0.92));
-  color: #fff7ed;
-  box-shadow: 0 22px 48px rgba(146, 64, 14, 0.24);
-}
-
-.hero-kicker {
-  margin-bottom: 10px;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(255, 237, 213, 0.76);
-}
-
-.hero-copy h3 {
-  font-size: 30px;
-  font-weight: 700;
-}
-
-.hero-desc {
-  max-width: 760px;
-  margin-top: 12px;
-  line-height: 1.78;
-  color: rgba(255, 247, 237, 0.88);
-}
-
-.hero-meta {
-  min-width: 250px;
-  padding: 18px;
-  border-radius: 18px;
-  background: rgba(124, 45, 18, 0.24);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(12px);
-}
-
-.hero-meta-label {
-  font-size: 12px;
-  color: rgba(255, 237, 213, 0.72);
-}
-
-.hero-meta-value {
-  margin-top: 10px;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.45;
-}
-
-.hero-meta-subtitle {
-  margin-top: 10px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: rgba(255, 247, 237, 0.82);
+  width: 100%;
 }
 
 .control-card,
 .history-card,
 .detail-card {
-  border-radius: 20px;
-  border: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 .section-header {
@@ -1196,11 +1124,6 @@ onMounted(refreshAll)
   color: var(--text-secondary);
 }
 
-:deep(html.dark) .hero-panel,
-:deep(.dark) .hero-panel {
-  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.36);
-}
-
 :deep(html.dark) .account-tile,
 :deep(.dark) .account-tile,
 :deep(html.dark) .stat-card,
@@ -1237,15 +1160,6 @@ onMounted(refreshAll)
 }
 
 @media (max-width: 820px) {
-  .hero-panel {
-    flex-direction: column;
-    padding: 24px;
-  }
-
-  .hero-meta {
-    width: 100%;
-  }
-
   .form-grid,
   .account-grid,
   .detail-stats {

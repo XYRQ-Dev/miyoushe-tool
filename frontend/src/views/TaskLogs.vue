@@ -1,7 +1,17 @@
 <template>
-  <div class="logs-page">
-    <!-- 筛选栏 -->
-    <el-card class="filter-card" shadow="never">
+  <div class="app-page logs-page">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">Execution Trace</div>
+        <h2 class="page-title">签到日志</h2>
+        <p class="page-desc">按时间、账号和状态筛选签到结果，快速查看最近执行情况。</p>
+      </div>
+      <div class="page-actions">
+        <el-button :icon="Search" @click="loadLogs">刷新结果</el-button>
+      </div>
+    </section>
+
+    <el-card class="filter-card filter-panel" shadow="never">
       <el-form inline>
         <el-form-item label="状态">
           <el-select v-model="filters.status" clearable placeholder="全部" style="width: 140px">
@@ -30,8 +40,17 @@
       </el-form>
     </el-card>
 
-    <!-- 日志表格 -->
-    <el-card class="table-card" shadow="never">
+    <el-card class="table-card data-table-card" shadow="never">
+      <template #header>
+        <div class="section-head">
+          <div>
+            <div class="section-title">执行记录</div>
+            <div class="section-desc">按时间、账号、游戏和执行结果查看最近的签到落库情况。</div>
+          </div>
+          <div class="soft-chip">共 {{ pagination.total }} 条</div>
+        </div>
+      </template>
+
       <el-table :data="logs" v-loading="loading" stripe style="width: 100%" table-layout="auto">
         <el-table-column label="时间" prop="executed_at" :min-width="compactMode ? 150 : 180">
           <template #default="{ row }">
@@ -155,27 +174,23 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .logs-page {
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .filter-card {
-  margin-bottom: 16px;
-  border-radius: 12px;
-  border: 1px solid var(--border-color);
+  padding: 0;
 }
 
 .filter-card :deep(.el-card__body) {
-  padding: 16px 20px 0;
+  padding: 0;
 }
 
 .table-card {
-  border-radius: 12px;
-  border: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 .pagination {
-  margin-top: 16px;
+  margin-top: 18px;
   display: flex;
   justify-content: flex-end;
 }
@@ -199,7 +214,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .logs-page {
-    max-width: none;
+    width: 100%;
   }
 
   .filter-card :deep(.el-form) {

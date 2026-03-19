@@ -1,11 +1,21 @@
 <template>
-  <div class="settings-page">
-    <!-- 个人设置 -->
-    <el-card class="settings-card" shadow="never">
+  <div class="app-page settings-page">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">System Controls</div>
+        <h2 class="page-title">系统设置</h2>
+        <p class="page-desc">调整通知、自动签到、界面模式和邮件发送配置。</p>
+      </div>
+    </section>
+
+    <el-card class="settings-card panel-card" shadow="never">
       <template #header>
-        <div class="card-title">
-          <el-icon><User /></el-icon>
-          <span>个人设置</span>
+        <div class="section-head">
+          <div>
+            <div class="section-title">个人设置</div>
+            <div class="section-desc">更新通知邮箱和通知策略，控制个人级消息接收方式。</div>
+          </div>
+          <el-icon class="section-icon"><User /></el-icon>
         </div>
       </template>
 
@@ -38,12 +48,14 @@
       </el-form>
     </el-card>
 
-    <!-- 签到调度设置 -->
-    <el-card class="settings-card" shadow="never">
+    <el-card class="settings-card panel-card" shadow="never">
       <template #header>
-        <div class="card-title">
-          <el-icon><Clock /></el-icon>
-          <span>签到调度</span>
+        <div class="section-head">
+          <div>
+            <div class="section-title">签到调度</div>
+            <div class="section-desc">控制自动签到是否启用、何时执行，以及调度任务是否在后端正常注册。</div>
+          </div>
+          <el-icon class="section-icon"><Clock /></el-icon>
         </div>
       </template>
 
@@ -98,12 +110,14 @@
       </el-form>
     </el-card>
 
-    <!-- 外观设置 -->
-    <el-card class="settings-card" shadow="never">
+    <el-card class="settings-card panel-card" shadow="never">
       <template #header>
-        <div class="card-title">
-          <el-icon><Sunny /></el-icon>
-          <span>外观设置</span>
+        <div class="section-head">
+          <div>
+            <div class="section-title">外观设置</div>
+            <div class="section-desc">选择你习惯的界面模式，设置会立即生效。</div>
+          </div>
+          <el-icon class="section-icon"><Sunny /></el-icon>
         </div>
       </template>
 
@@ -119,12 +133,14 @@
       </el-form>
     </el-card>
 
-    <!-- 管理员区域 -->
-    <el-card v-if="userStore.isAdmin" class="settings-card" shadow="never">
+    <el-card v-if="userStore.isAdmin" class="settings-card panel-card" shadow="never">
       <template #header>
-        <div class="card-title">
-          <el-icon><Message /></el-icon>
-          <span>系统邮件配置（管理员）</span>
+        <div class="section-head">
+          <div>
+            <div class="section-title">系统邮件配置</div>
+            <div class="section-desc">管理员可配置系统发信用的 SMTP 信息。</div>
+          </div>
+          <el-icon class="section-icon"><Message /></el-icon>
         </div>
       </template>
 
@@ -132,7 +148,7 @@
         type="info"
         :closable="false"
         class="admin-alert"
-        title="这里配置的是系统发信 SMTP；用户个人设置里的通知邮箱只决定邮件发给谁。"
+        title="这里的邮箱用于系统发信；用户个人设置里的通知邮箱决定邮件发给谁。"
       />
 
       <el-form label-width="140px" :model="emailSettingsForm">
@@ -175,7 +191,6 @@
         </el-form-item>
       </el-form>
     </el-card>
-
   </div>
 </template>
 
@@ -321,27 +336,25 @@ onMounted(loadSettings)
 
 <style scoped>
 .settings-page {
-  max-width: 880px;
-  margin: 0 auto;
+  width: min(980px, 100%);
 }
 
 .settings-card {
-  margin-bottom: 20px;
-  border-radius: 16px;
-  border: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
+.section-icon {
+  font-size: 18px;
+  color: var(--brand-secondary);
+  flex: 0 0 auto;
 }
 
 .form-hint {
+  display: inline-block;
   margin-left: 12px;
   font-size: 12px;
   color: var(--text-secondary);
+  line-height: 1.7;
 }
 
 .schedule-status {
@@ -357,7 +370,7 @@ onMounted(loadSettings)
 
 @media (max-width: 768px) {
   .settings-page {
-    max-width: none;
+    width: 100%;
   }
 
   .settings-card :deep(.el-form) {

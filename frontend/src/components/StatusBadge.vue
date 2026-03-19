@@ -95,32 +95,32 @@ const label = computed(() => {
 }
 
 .status-badge--success {
-  background: linear-gradient(135deg, #ecfdf3 0%, #dcfce7 100%);
-  color: #167c45;
-  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.18);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(16, 185, 129, 0.2) 100%);
+  color: var(--success-color);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.18);
 }
 
 .status-badge--failed {
-  background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
-  color: #d53f5a;
-  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.2);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.18) 100%);
+  color: var(--danger-color);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18);
 }
 
 .status-badge--already_signed {
-  background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 100%);
-  color: #526075;
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.22);
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(148, 163, 184, 0.18) 100%);
+  color: var(--text-secondary);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
 }
 
 .status-badge--risk {
-  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
-  color: #c26a18;
-  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.2);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(245, 158, 11, 0.18) 100%);
+  color: var(--warning-color);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.18);
 }
 
 .status-badge--unknown {
-  background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 100%);
-  color: #526075;
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.22);
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(148, 163, 184, 0.18) 100%);
+  color: var(--text-secondary);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
 }
 </style>

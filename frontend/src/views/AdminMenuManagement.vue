@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <h3>菜单与功能开关</h3>
-            <p>按用户类型控制侧边栏菜单和仪表盘内功能开关是否生效。隐藏后将同时禁止该用户类型直接访问页面；其中 notes 关闭后还会停止首页实时便笺渲染与相关接口请求。</p>
+            <p>按用户类型控制菜单和功能是否可见。关闭后，对应用户将无法在界面中看到并使用相关功能。</p>
           </div>
           <div class="header-actions">
             <el-button :icon="Refresh" @click="loadMenus" :loading="loading" round>刷新</el-button>
@@ -18,7 +18,7 @@
         type="warning"
         :closable="false"
         class="menu-alert"
-        title="菜单与功能开关管理页是管理员保底入口，不参与隐藏配置，避免误操作后无法恢复后台访问。"
+        title="当前页面始终对管理员可见，避免误操作后无法恢复其他菜单。"
       />
 
       <el-table :data="menuItems" stripe table-layout="auto">
@@ -48,8 +48,8 @@
         </el-table-column>
         <el-table-column label="说明" min-width="140">
           <template #default="{ row }">
-            <el-tag v-if="!row.editable" type="warning" size="small">保底入口</el-tag>
-            <span v-else-if="isNotesMenuItem(row)" class="row-tip">关闭后会同时停止首页便笺渲染与数据请求</span>
+            <el-tag v-if="!row.editable" type="warning" size="small">始终可见</el-tag>
+            <span v-else-if="isNotesMenuItem(row)" class="row-tip">关闭后，用户将无法在首页查看实时便笺</span>
             <span v-else-if="row.navigable === false" class="row-tip">按角色控制该功能开关是否生效</span>
             <span v-else class="row-tip">按角色单独生效</span>
           </template>

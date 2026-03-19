@@ -1,21 +1,17 @@
 <template>
-  <div class="gacha-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="hero-kicker">Asset Archive</p>
-        <h3>抽卡记录中心</h3>
-        <p class="hero-desc">
-          把抽卡历史沉淀成可检索、可统计的个人档案。首版支持原神与星穹铁道的完整链接导入，
-          自动去重并保留基础统计，适合作为后续资产中心的第一块基座。
-        </p>
+  <div class="app-page gacha-page">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">Asset Archive</div>
+        <h2 class="page-title">抽卡记录中心</h2>
+        <p class="page-desc">导入抽卡链接后即可查看统计结果和历史记录。</p>
       </div>
-      <div class="hero-meta">
-        <div class="hero-meta-label">最近导入</div>
-        <div class="hero-meta-value">{{ latestImportMessage }}</div>
+      <div class="page-actions">
+        <div class="soft-chip">{{ latestImportMessage }}</div>
       </div>
     </section>
 
-    <el-card class="import-card" shadow="never">
+    <el-card class="import-card panel-card" shadow="never">
       <template #header>
         <div class="section-header">
           <div>
@@ -126,7 +122,7 @@
       <div class="stat-card stat-card-primary">
         <div class="stat-label">累计抽数</div>
         <div class="stat-value">{{ summary.total_count || 0 }}</div>
-        <div class="stat-note">当前账号在所选游戏下已归档的总抽数</div>
+        <div class="stat-note">当前账号在所选游戏下已保存的总抽数</div>
       </div>
 
       <div class="stat-card">
@@ -138,7 +134,7 @@
       <div class="stat-card">
         <div class="stat-label">四星次数</div>
         <div class="stat-value">{{ summary.four_star_count || 0 }}</div>
-        <div class="stat-note">首版仅保留基础统计，不推导保底结论</div>
+        <div class="stat-note">显示已记录的四星次数</div>
       </div>
 
       <div class="stat-card">
@@ -149,7 +145,7 @@
     </div>
 
     <div class="content-grid">
-      <el-card class="pool-card" shadow="never">
+      <el-card class="pool-card panel-card" shadow="never">
         <template #header>
           <div class="section-header">
             <div>
@@ -180,7 +176,7 @@
         />
       </el-card>
 
-      <el-card class="record-card" shadow="never">
+      <el-card class="record-card panel-card" shadow="never">
         <template #header>
           <div class="section-header section-header-wrap">
             <div>
@@ -569,74 +565,13 @@ onMounted(loadPageData)
 
 <style scoped>
 .gacha-page {
-  max-width: 1280px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.hero-panel {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: flex-start;
-  padding: 28px;
-  border-radius: 24px;
-  background:
-    radial-gradient(circle at top right, rgba(129, 140, 248, 0.34), transparent 30%),
-    radial-gradient(circle at left bottom, rgba(244, 114, 182, 0.2), transparent 30%),
-    linear-gradient(135deg, rgba(30, 27, 75, 0.96), rgba(67, 56, 202, 0.9));
-  color: #eef2ff;
-  box-shadow: 0 20px 48px rgba(49, 46, 129, 0.24);
-}
-
-.hero-kicker {
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(224, 231, 255, 0.78);
-  margin-bottom: 10px;
-}
-
-.hero-copy h3 {
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.hero-desc {
-  max-width: 760px;
-  margin-top: 12px;
-  line-height: 1.75;
-  color: rgba(224, 231, 255, 0.88);
-}
-
-.hero-meta {
-  min-width: 220px;
-  padding: 18px;
-  border-radius: 18px;
-  background: rgba(15, 23, 42, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(12px);
-}
-
-.hero-meta-label {
-  font-size: 12px;
-  color: rgba(224, 231, 255, 0.72);
-}
-
-.hero-meta-value {
-  margin-top: 10px;
-  line-height: 1.6;
-  font-size: 15px;
-  font-weight: 600;
+  width: 100%;
 }
 
 .import-card,
 .pool-card,
 .record-card {
-  border-radius: 20px;
-  border: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 .section-header {
@@ -831,11 +766,6 @@ onMounted(loadPageData)
   color: var(--text-secondary);
 }
 
-:deep(html.dark) .hero-panel,
-:deep(.dark) .hero-panel {
-  box-shadow: 0 20px 48px rgba(2, 6, 23, 0.35);
-}
-
 :deep(html.dark) .stat-card,
 :deep(.dark) .stat-card {
   background:
@@ -868,19 +798,6 @@ onMounted(loadPageData)
 @media (max-width: 768px) {
   .gacha-page {
     gap: 16px;
-  }
-
-  .hero-panel {
-    flex-direction: column;
-    padding: 22px;
-  }
-
-  .hero-copy h3 {
-    font-size: 24px;
-  }
-
-  .hero-meta {
-    width: 100%;
   }
 
   .import-grid,

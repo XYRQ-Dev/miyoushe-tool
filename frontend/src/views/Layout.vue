@@ -1,25 +1,24 @@
 <template>
-  <el-container class="app-layout">
-    <!-- 侧边栏 -->
-    <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo-mini" v-if="isCollapse">
-          <el-icon :size="24"><Star /></el-icon>
+  <div class="shell-layout">
+    <aside :class="['shell-sidebar', { 'shell-sidebar-collapsed': isSidebarCollapsed }]">
+      <div class="brand-block">
+        <div class="brand-mark">
+          <el-icon :size="isSidebarCollapsed ? 22 : 20"><Star /></el-icon>
         </div>
-        <div class="logo-full" v-else>
-          <el-icon :size="20"><Star /></el-icon>
-          <span>米游社签到</span>
+        <div v-if="!isSidebarCollapsed" class="brand-copy">
+          <div class="brand-name">MiHaYou Tool</div>
+          <div class="brand-subtitle">签到与账号管理</div>
         </div>
       </div>
 
       <el-menu
         :default-active="activeMenu"
-        :collapse="isCollapse"
+        :collapse="isSidebarCollapsed"
         router
         class="sidebar-menu"
         background-color="transparent"
-        text-color="rgba(255,255,255,0.7)"
-        active-text-color="#fff"
+        text-color="rgba(231, 240, 251, 0.72)"
+        active-text-color="#f8fbff"
       >
         <el-menu-item v-for="menu in visibleMenus" :key="menu.key" :index="menu.path">
           <el-icon><component :is="menuIconMap[menu.key]" /></el-icon>
@@ -27,42 +26,46 @@
         </el-menu-item>
       </el-menu>
 
-      <div class="sidebar-footer">
+      <div v-if="!isCompactLayout" class="sidebar-footer">
         <el-button
           :icon="isCollapse ? Expand : Fold"
+          class="sidebar-toggle"
           text
-          class="collapse-btn"
           @click="isCollapse = !isCollapse"
-        />
+        >
+          <span v-if="!isCollapse">收起导航</span>
+        </el-button>
       </div>
-    </el-aside>
+    </aside>
 
-    <!-- 主内容区域 -->
-    <el-container>
-      <!-- 顶部导航栏 -->
-      <el-header class="topbar" height="60px">
-        <div class="topbar-left">
-          <h2>{{ pageTitle }}</h2>
+    <div class="shell-main">
+      <header class="shell-topbar">
+        <div class="topbar-copy">
+          <div class="topbar-kicker">{{ topbarKicker }}</div>
+          <h1>{{ pageTitle }}</h1>
         </div>
-        <div class="topbar-right">
+        <div class="topbar-actions">
           <el-button
             :icon="userStore.darkMode ? Sunny : Moon"
             circle
-            size="small"
+            class="topbar-icon-button"
             @click="userStore.toggleDarkMode()"
           />
           <el-dropdown trigger="click">
-            <div class="user-avatar">
-              <el-avatar :size="32" :style="{ background: 'var(--primary-color)' }">
+            <button type="button" class="user-entry">
+              <el-avatar :size="34" class="user-avatar">
                 {{ userStore.userInfo?.username?.charAt(0)?.toUpperCase() }}
               </el-avatar>
-              <span class="username">{{ userStore.userInfo?.username }}</span>
-              <el-icon><ArrowDown /></el-icon>
-            </div>
+              <div class="user-copy">
+                <span class="user-name">{{ userStore.userInfo?.username }}</span>
+                <span class="user-role">{{ userStore.isAdmin ? '管理员' : '普通用户' }}</span>
+              </div>
+              <el-icon class="user-arrow"><ArrowDown /></el-icon>
+            </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item v-if="settingsVisible" @click="router.push('/settings')">
-                  <el-icon><Setting /></el-icon>设置
+                  <el-icon><Setting /></el-icon>系统设置
                 </el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon>退出登录
@@ -71,22 +74,21 @@
             </template>
           </el-dropdown>
         </div>
-      </el-header>
+      </header>
 
-      <!-- 页面内容 -->
-      <el-main class="main-content">
+      <main class="shell-content">
         <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
+          <transition name="page-fade" mode="out-in">
             <component :is="Component" />
           </transition>
         </router-view>
-      </el-main>
-    </el-container>
-  </el-container>
+      </main>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   Star, Odometer, User, UserFilled, Document, Setting, Collection,
@@ -100,6 +102,9 @@ const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 const isCollapse = ref(false)
+const isTabletViewport = ref(false)
+const isMobileViewport = ref(false)
+
 const menuIconMap: Record<AppMenuKey, unknown> = {
   dashboard: Odometer,
   notes: Odometer,
@@ -117,10 +122,26 @@ const menuIconMap: Record<AppMenuKey, unknown> = {
 const activeMenu = computed(() => route.path)
 const visibleMenus = computed(() => getVisibleMenus(userStore.visibleMenuKeys).filter((item) => item.navigable !== false))
 const settingsVisible = computed(() => hasMenuAccess('settings', userStore.visibleMenuKeys))
+const isCompactLayout = computed(() => isTabletViewport.value || isMobileViewport.value)
+const isSidebarCollapsed = computed(() => {
+  // 平板断点需要强制进入菜单折叠态，否则 CSS 已经把侧栏压窄，el-menu 仍按展开态排版，
+  // 会出现文案被裁切但交互仍视为“展开”的错位状态。
+  // 移动端改为独立堆叠布局，必须显式忽略桌面遗留的手动折叠状态；否则用户若先在桌面收起导航，
+  // 再切到手机宽度，就会看到菜单仍处于折叠态且当前断点下没有按钮可恢复展开。
+  if (isMobileViewport.value) return false
+  if (isTabletViewport.value) return true
+  return isCollapse.value
+})
 
 const pageTitle = computed(() => {
   const matchedMenu = APP_MENUS.find((item) => item.path === route.path)
-  return matchedMenu?.label || '米游社签到'
+  return matchedMenu?.label || '米游社工具台'
+})
+
+const topbarKicker = computed(() => {
+  if (route.path.startsWith('/admin')) return 'Admin Surface'
+  if (route.path === '/') return 'Operational Surface'
+  return 'Unified Workspace'
 })
 
 function handleLogout() {
@@ -128,130 +149,289 @@ function handleLogout() {
   router.push('/login')
 }
 
+function syncViewportState() {
+  const width = window.innerWidth
+  isMobileViewport.value = width <= 768
+  isTabletViewport.value = width > 768 && width <= 1080
+}
+
 onMounted(() => {
   userStore.ensureUserInfoLoaded()
+  syncViewportState()
+  window.addEventListener('resize', syncViewportState)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncViewportState)
 })
 </script>
 
 <style scoped>
-.app-layout {
+.shell-layout {
   min-height: 100vh;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
-.sidebar {
-  background: linear-gradient(180deg, #1e1b4b 0%, #312e81 100%);
-  transition: width 0.3s;
+.shell-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  width: 252px;
+  padding: 18px 16px 20px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 18px;
+  background: var(--bg-sidebar);
+  box-shadow: var(--shadow-sidebar);
+  transition: width var(--transition-medium), padding var(--transition-medium);
 }
 
-.sidebar-header {
-  height: 60px;
+.shell-sidebar-collapsed {
+  width: 92px;
+  padding-inline: 12px;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(191, 219, 254, 0.12);
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f8fbff;
+  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.24);
 }
 
-.logo-mini {
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.brand-copy {
+  min-width: 0;
 }
 
-.logo-full {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: white;
+.brand-name {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 800;
+  color: #f8fbff;
+}
+
+.brand-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(231, 240, 251, 0.72);
 }
 
 .sidebar-menu {
   flex: 1;
   border-right: none;
-  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .sidebar-menu :deep(.el-menu-item) {
-  border-radius: 8px;
-  margin-bottom: 4px;
-  height: 44px;
-}
-
-.sidebar-menu :deep(.el-menu-item.is-active) {
-  background: rgba(255, 255, 255, 0.15) !important;
+  height: 46px;
+  margin-bottom: 6px;
+  border-radius: 16px;
+  transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
 .sidebar-menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  transform: translateX(1px);
+}
+
+.sidebar-menu :deep(.el-menu-item.is-active) {
+  background: var(--bg-sidebar-active) !important;
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.16);
 }
 
 .sidebar-footer {
-  padding: 12px;
-  display: flex;
+  padding-top: 6px;
+}
+
+.sidebar-toggle {
+  width: 100%;
   justify-content: center;
+  color: rgba(231, 240, 251, 0.7);
 }
 
-.collapse-btn {
-  color: rgba(255, 255, 255, 0.6);
+.shell-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.topbar {
-  background: var(--card-bg);
-  border-bottom: 1px solid var(--border-color);
+.shell-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  gap: 16px;
+  padding: 20px 28px 14px;
+  background: linear-gradient(180deg, rgba(237, 243, 251, 0.96), rgba(237, 243, 251, 0.82));
+  backdrop-filter: blur(20px);
 }
 
-.topbar h2 {
-  font-size: 18px;
-  font-weight: 600;
+:global(html.dark) .shell-topbar {
+  background: linear-gradient(180deg, rgba(7, 17, 31, 0.96), rgba(7, 17, 31, 0.82));
+}
+
+.topbar-copy {
+  min-width: 0;
+}
+
+.topbar-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--brand-secondary);
+}
+
+.topbar-copy h1 {
+  margin: 6px 0 0;
+  font-size: 24px;
+  line-height: 1.1;
   color: var(--text-primary);
 }
 
-.topbar-right {
+.topbar-actions {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.user-avatar {
+.topbar-icon-button {
+  flex: 0 0 auto;
+}
+
+.user-entry {
+  border: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 8px;
-  transition: background 0.2s;
-}
-
-.user-avatar:hover {
-  background: var(--bg-color);
-}
-
-.username {
-  font-size: 14px;
+  gap: 10px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 18px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
   color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
 }
 
-.main-content {
-  background: var(--bg-color);
-  padding: 24px;
+.user-avatar {
+  background: var(--bg-primary);
+  color: #f8fbff;
 }
 
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
+.user-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
 }
 
-.fade-enter-from,
-.fade-leave-to {
+.user-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.user-role {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.user-arrow {
+  color: var(--text-tertiary);
+}
+
+.shell-content {
+  min-width: 0;
+  padding: 10px 28px 28px;
+}
+
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.page-fade-enter-from,
+.page-fade-leave-to {
   opacity: 0;
+  transform: translateY(4px);
+}
+
+@media (max-width: 1080px) and (min-width: 769px) {
+  .shell-layout {
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+
+  .shell-sidebar {
+    width: 92px;
+    padding-inline: 12px;
+  }
+
+  .brand-copy,
+  .sidebar-toggle span {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .shell-layout {
+    display: block;
+  }
+
+  .shell-sidebar {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 14px;
+  }
+
+  .shell-sidebar-collapsed {
+    width: auto;
+  }
+
+  .sidebar-menu :deep(.el-menu--collapse) {
+    width: 100%;
+  }
+
+  .shell-topbar,
+  .shell-content {
+    padding-inline: 16px;
+  }
+
+  .shell-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar-copy h1 {
+    font-size: 22px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .user-copy {
+    display: none;
+  }
 }
 </style>

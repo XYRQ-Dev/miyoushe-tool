@@ -204,7 +204,7 @@ watch(() => props.visible, (val) => {
   gap: 8px;
 }
 
-html.dark .scanned-overlay {
+:global(html.dark) .scanned-overlay {
   background: rgba(30, 41, 59, 0.9);
 }
 

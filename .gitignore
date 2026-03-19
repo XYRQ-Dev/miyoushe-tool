@@ -17,6 +17,7 @@ frontend/components.d.ts
 # Playwright 调试目录、前端开发日志和输出目录都属于本地运行产物。
 # 如果把这类文件纳入版本库，会持续引入与业务功能无关的噪音变更，影响代码审查和提交边界判断。
 .playwright-cli/
+.superpowers/
 frontend/codex-frontend-dev.stderr.log
 frontend/codex-frontend-dev.stdout.log
 output/

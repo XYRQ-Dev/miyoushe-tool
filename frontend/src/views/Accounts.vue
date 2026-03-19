@@ -1,11 +1,17 @@
 <template>
-  <div class="accounts-page">
-    <div class="page-header">
-      <h3>米哈游账号</h3>
-      <el-button type="primary" :icon="Plus" @click="handleAddAccount" round>
-        添加账号
-      </el-button>
-    </div>
+  <div class="app-page accounts-page">
+    <section class="page-toolbar">
+      <div class="page-title-group">
+        <div class="page-kicker">Account Console</div>
+        <h2 class="page-title">账号管理</h2>
+        <p class="page-desc">绑定账号、更新登录状态，并查看每个账号下的角色信息。</p>
+      </div>
+      <div class="page-actions">
+        <el-button type="primary" :icon="Plus" @click="handleAddAccount">
+          添加账号
+        </el-button>
+      </div>
+    </section>
 
     <!-- 空状态 -->
     <el-empty
@@ -124,25 +130,7 @@ onMounted(loadAccounts)
 
 <style scoped>
 .accounts-page {
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 24px;
-}
-
-.page-header h3 {
-  font-size: 16px;
-  color: var(--text-primary);
-}
-
-.page-header .el-button--primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border: none;
+  width: 100%;
 }
 
 .account-grid {
