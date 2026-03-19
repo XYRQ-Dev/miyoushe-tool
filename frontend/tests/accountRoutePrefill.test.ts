@@ -91,6 +91,9 @@ assert.deepEqual(shouldNotReplayGameAfterEmptyLoad, { preferredGame: null, consu
 assert.equal(getNoteStatusText('verification_required'), '需验证')
 assert.equal(getNoteStatusType('verification_required'), 'warning')
 assert.equal(getNoteNoticeTone('verification_required'), 'warning')
+assert.equal(getNoteStatusText('upstream_error'), '查询失败')
+assert.equal(getNoteStatusType('upstream_error'), 'danger')
+assert.equal(getNoteNoticeTone('upstream_error'), 'error')
 assert.equal(getNoteNoticeTone('error'), 'error')
 assert.equal(APP_MENUS.some((item) => item.key === 'admin_menu_management'), true)
 assert.equal(
@@ -207,6 +210,26 @@ assertSourceMatches(
   dashboardView,
   /async\s+function\s+loadData\s*\(\s*\)\s*\{[\s\S]*?if\s*\(\s*hasNotesAccess\.value\s*\)\s*\{[\s\S]*?\}\s*else\s*\{[\s\S]*?resetNotesPanelState\s*\(\s*\)\s*[\s\S]*?\}/,
   'Dashboard.vue 的 loadData 应保留与 if (hasNotesAccess.value) 成对的 else 分支，并在未授权时执行 resetNotesPanelState()',
+)
+assertSourceMatches(
+  dashboardView,
+  /card\.detail_kind\s*===\s*['"]genshin['"]/,
+  'Dashboard.vue 应显式识别 genshin detail_kind，避免新协议落地后仍只靠 metrics 渲染',
+)
+assertSourceMatches(
+  dashboardView,
+  /card\.detail_kind\s*===\s*['"]starrail['"]/,
+  'Dashboard.vue 应显式识别 starrail detail_kind，确保星铁 detail 字段被消费',
+)
+assertSourceMatches(
+  dashboardView,
+  /card\.detail_kind\s*===\s*['"]zzz['"]/,
+  'Dashboard.vue 应显式识别 zzz detail_kind，确保绝区零 detail 字段被消费',
+)
+assertSourceMatches(
+  dashboardView,
+  /card\.detail\??\./,
+  'Dashboard.vue 应开始消费 detail 字段，而不是继续只依赖旧的 metrics 摘要层',
 )
 
 const layoutView = fs.readFileSync(

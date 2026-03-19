@@ -168,16 +168,52 @@
                     <span>{{ card.message || '暂时无法获取便笺信息' }}</span>
                   </div>
 
-                  <div v-else class="note-metrics">
-                    <div
-                      v-for="metric in card.metrics"
-                      :key="metric.key"
-                      class="note-metric"
-                      :class="`tone-${metric.tone}`"
-                    >
-                      <div class="note-metric-label">{{ metric.label }}</div>
-                      <div class="note-metric-value">{{ metric.value }}</div>
-                      <div class="note-metric-detail">{{ metric.detail || '暂无额外说明' }}</div>
+                  <div v-else class="note-content">
+                    <div v-if="card.detail_kind === 'genshin'" class="note-detail-stack">
+                      <div
+                        v-for="item in getGenshinDetailItems(card)"
+                        :key="item.label"
+                        class="note-detail-item"
+                      >
+                        <div class="note-detail-label">{{ item.label }}</div>
+                        <div class="note-detail-value">{{ item.value }}</div>
+                        <div class="note-detail-meta">{{ item.detail }}</div>
+                      </div>
+                    </div>
+                    <div v-else-if="card.detail_kind === 'starrail'" class="note-detail-stack">
+                      <div
+                        v-for="item in getStarrailDetailItems(card)"
+                        :key="item.label"
+                        class="note-detail-item"
+                      >
+                        <div class="note-detail-label">{{ item.label }}</div>
+                        <div class="note-detail-value">{{ item.value }}</div>
+                        <div class="note-detail-meta">{{ item.detail }}</div>
+                      </div>
+                    </div>
+                    <div v-else-if="card.detail_kind === 'zzz'" class="note-detail-stack">
+                      <div
+                        v-for="item in getZzzDetailItems(card)"
+                        :key="item.label"
+                        class="note-detail-item"
+                      >
+                        <div class="note-detail-label">{{ item.label }}</div>
+                        <div class="note-detail-value">{{ item.value }}</div>
+                        <div class="note-detail-meta">{{ item.detail }}</div>
+                      </div>
+                    </div>
+
+                    <div class="note-metrics">
+                      <div
+                        v-for="metric in card.metrics"
+                        :key="metric.key"
+                        class="note-metric"
+                        :class="`tone-${metric.tone}`"
+                      >
+                        <div class="note-metric-label">{{ metric.label }}</div>
+                        <div class="note-metric-value">{{ metric.value }}</div>
+                        <div class="note-metric-detail">{{ metric.detail || '暂无额外说明' }}</div>
+                      </div>
                     </div>
                   </div>
                 </article>
@@ -255,6 +291,14 @@ import { ElMessage } from 'element-plus'
 import { logApi, notesApi, taskApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
 import { useUserStore } from '../stores/user'
+import type {
+  GenshinNoteCard,
+  NoteAccount,
+  NoteCard,
+  NoteSummaryResponse,
+  StarrailNoteCard,
+  ZzzNoteCard,
+} from '../types/notes'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
 import { hasMenuAccess } from '../utils/menuVisibility'
 import {
@@ -263,34 +307,10 @@ import {
   getNoteStatusType,
 } from '../utils/noteStatus'
 
-type NoteAccount = {
-  id: number
-  nickname?: string
-  mihoyo_uid?: string
-  supported_games: string[]
-}
-
-type NoteMetric = {
-  key: string
+type NoteDetailItem = {
   label: string
   value: string
-  detail?: string | null
-  tone: string
-}
-
-type NoteCard = {
-  role_id: number
-  game: string
-  game_name: string
-  game_biz: string
-  role_uid: string
-  role_nickname?: string | null
-  region?: string | null
-  level?: number | null
-  status: string
-  message?: string | null
-  updated_at?: string | null
-  metrics: NoteMetric[]
+  detail: string
 }
 
 const status = ref<any>({})
@@ -305,7 +325,9 @@ const noteAccounts = ref<NoteAccount[]>([])
 const selectedNoteAccountId = ref<number | null>(null)
 const notesLoading = ref(false)
 const routeAccountPrefillConsumed = ref(false)
-const noteSummary = ref({
+const noteSummary = ref<NoteSummaryResponse>({
+  schema_version: 2,
+  provider: 'genshin.py',
   account_id: 0,
   account_name: '',
   total_cards: 0,
@@ -336,6 +358,8 @@ function formatNoteAccountLabel(account: NoteAccount) {
 
 function resetNoteSummary() {
   noteSummary.value = {
+    schema_version: 2,
+    provider: 'genshin.py',
     account_id: 0,
     account_name: '',
     total_cards: 0,
@@ -343,6 +367,122 @@ function resetNoteSummary() {
     failed_cards: 0,
     cards: [],
   }
+}
+
+  function formatSecondsText(seconds: number) {
+    if (!seconds) return '已完成'
+    const totalMinutes = Math.max(0, Math.floor(seconds / 60))
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    if (hours > 0) return `${hours}小时${minutes}分钟`
+    return `${minutes}分钟`
+  }
+
+  function formatRecoveryDetail(seconds: number, suffix: string, fallback: string) {
+    if (!seconds) {
+      // 0 秒表示目标已经达成，不能继续把“状态”词当时长与“约 … 后”拼接，否则会出现不自然文案
+      return fallback
+    }
+    return `约 ${formatSecondsText(seconds)} ${suffix}`
+  }
+
+function isGenshinCard(card: NoteCard): card is GenshinNoteCard {
+  const detail = card.detail as GenshinNoteCard['detail'] | undefined
+  return card.detail_kind === 'genshin' && typeof detail?.current_resin === 'number'
+}
+
+function isStarrailCard(card: NoteCard): card is StarrailNoteCard {
+  const detail = card.detail as StarrailNoteCard['detail'] | undefined
+  return card.detail_kind === 'starrail' && typeof detail?.current_stamina === 'number'
+}
+
+function isZzzCard(card: NoteCard): card is ZzzNoteCard {
+  const detail = card.detail as ZzzNoteCard['detail'] | undefined
+  return card.detail_kind === 'zzz' && typeof detail?.battery_charge?.current === 'number'
+}
+
+function getGenshinDetailItems(card: NoteCard): NoteDetailItem[] {
+  if (!isGenshinCard(card)) return []
+  return [
+      {
+        label: '树脂恢复',
+        value: `${card.detail.current_resin}/${card.detail.max_resin}`,
+        detail: formatRecoveryDetail(
+          card.detail.remaining_resin_recovery_seconds,
+          '后回满',
+          '已回满',
+        ),
+      },
+      {
+        label: '洞天宝钱',
+        value: `${card.detail.current_realm_currency}/${card.detail.max_realm_currency}`,
+        detail: formatRecoveryDetail(
+          card.detail.remaining_realm_currency_recovery_seconds,
+          '后接近上限',
+          '已接近上限',
+        ),
+      },
+    {
+      label: '委托与周本',
+      value: `${card.detail.completed_commissions}/${card.detail.max_commissions}`,
+      detail: `周本减半 ${card.detail.remaining_weekly_discounts}/${card.detail.max_weekly_discounts}`,
+    },
+  ]
+}
+
+function getStarrailDetailItems(card: NoteCard): NoteDetailItem[] {
+  if (!isStarrailCard(card)) return []
+  const weeklyPoints = card.detail.have_bonus_synchronicity_points
+    ? `${card.detail.current_bonus_synchronicity_points}/${card.detail.max_bonus_synchronicity_points}`
+    : `${card.detail.current_rogue_score}/${card.detail.max_rogue_score}`
+  return [
+      {
+        label: '开拓力恢复',
+        value: `${card.detail.current_stamina}/${card.detail.max_stamina}`,
+        detail: formatRecoveryDetail(
+          card.detail.remaining_stamina_recovery_seconds,
+          '后回满',
+          '已回满',
+        ),
+      },
+    {
+      label: '后备开拓力',
+      value: String(card.detail.current_reserve_stamina),
+      detail: card.detail.is_reserve_stamina_full ? '当前已满' : '仍可继续累积',
+    },
+    {
+      label: '周常进度',
+      value: weeklyPoints,
+      detail: `派遣完成 ${card.detail.finished_expeditions}/${card.detail.total_expedition_num}`,
+    },
+  ]
+}
+
+function getZzzDetailItems(card: NoteCard): NoteDetailItem[] {
+  if (!isZzzCard(card)) return []
+  return [
+      {
+        label: '电量恢复',
+        value: `${card.detail.battery_charge.current}/${card.detail.battery_charge.max}`,
+        detail: formatRecoveryDetail(
+          card.detail.battery_charge.seconds_till_full,
+          '后回满',
+          '已回满',
+        ),
+      },
+    {
+      label: '活跃度',
+      value: `${card.detail.engagement.current}/${card.detail.engagement.max}`,
+      detail: card.detail.scratch_card_completed ? '今日刮刮卡已完成' : '今日刮刮卡未完成',
+    },
+    {
+      label: '店铺与周常',
+      value: card.detail.video_store_state || '未知状态',
+      detail: card.detail.weekly_task
+        ? `周常 ${card.detail.weekly_task.cur_point}/${card.detail.weekly_task.max_point}`
+        : '暂无周常进度',
+    },
+  ]
 }
 
 function resetNotesPanelState() {
@@ -759,6 +899,44 @@ onMounted(loadData)
   color: #b45309;
 }
 
+.note-content {
+  display: grid;
+  gap: 14px;
+}
+
+.note-detail-stack {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.note-detail-item {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(203, 213, 225, 0.78);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.96));
+}
+
+.note-detail-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.note-detail-value {
+  margin-top: 6px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.note-detail-meta {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475569;
+}
+
 .note-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -930,6 +1108,7 @@ onMounted(loadData)
     width: 100%;
   }
 
+  .note-detail-stack,
   .note-metrics {
     grid-template-columns: 1fr;
   }

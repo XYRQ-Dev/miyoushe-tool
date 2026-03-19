@@ -2,6 +2,7 @@ export function getNoteStatusText(statusText: string) {
   if (statusText === 'available') return '可用'
   if (statusText === 'invalid_cookie') return '登录失效'
   if (statusText === 'verification_required') return '需验证'
+  if (statusText === 'unsupported') return '未接入'
   return '查询失败'
 }
 

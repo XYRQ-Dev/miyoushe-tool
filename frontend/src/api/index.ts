@@ -8,6 +8,7 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { applyAuthorizationHeader } from './authHeader'
+import type { NoteAccount, NoteSummaryResponse } from '../types/notes'
 
 const api = axios.create({
   baseURL: '/api',
@@ -144,8 +145,8 @@ export const gachaApi = {
 
 // ===== 实时便笺 API =====
 export const notesApi = {
-  getAccounts: () => api.get('/notes/accounts'),
-  getSummary: (params: { account_id: number }) => api.get('/notes/summary', { params }),
+  getAccounts: () => api.get<{ accounts: NoteAccount[]; total: number }>('/notes/accounts'),
+  getSummary: (params: { account_id: number }) => api.get<NoteSummaryResponse>('/notes/summary', { params }),
 }
 
 // ===== 账号健康中心 API =====
