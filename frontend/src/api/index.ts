@@ -8,7 +8,6 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { applyAuthorizationHeader } from './authHeader'
-import type { NoteAccount, NoteSummaryResponse } from '../types/notes'
 
 const api = axios.create({
   baseURL: '/api',
@@ -59,7 +58,7 @@ export const accountApi = {
   startQrLogin: () => api.post('/accounts/qr-login'),
   delete: (id: number) => api.delete(`/accounts/${id}`),
   refreshCookie: (id: number) => api.post(`/accounts/${id}/refresh-cookie`),
-  refreshLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
+  checkLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
 }
 
 // ===== 角色资产总览 API =====
@@ -141,12 +140,6 @@ export const gachaApi = {
     api.get('/gacha/export', { params }),
   reset: (params: { account_id: number; game: string }) =>
     api.delete('/gacha/reset', { params }),
-}
-
-// ===== 实时便笺 API =====
-export const notesApi = {
-  getAccounts: () => api.get<{ accounts: NoteAccount[]; total: number }>('/notes/accounts'),
-  getSummary: (params: { account_id: number }) => api.get<NoteSummaryResponse>('/notes/summary', { params }),
 }
 
 // ===== 账号健康中心 API =====

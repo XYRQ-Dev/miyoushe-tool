@@ -9,8 +9,8 @@ FastAPI 应用入口
 """
 
 import asyncio
-import json
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
-from app.config import settings
+from app.config import detect_setting_source, settings
 from app.database import init_db, async_session
 from app.models.account import MihoyoAccount
 from app.services.browser import browser_manager
@@ -29,8 +29,14 @@ from app.services.checkin import CheckinService
 from app.services.account_role_sync import sync_account_roles
 from app.services.login_state import LoginStateService
 from app.services.system_settings import SystemSettingsService
-from app.utils.crypto import encrypt_cookie
+from app.utils.crypto import encrypt_cookie, encrypt_text
 from app.utils.timezone import utc_now_naive
+
+# Windows 下如果事件循环策略退回到 SelectorEventLoop，`asyncio.create_subprocess_exec`
+# 会直接抛 `NotImplementedError`，而扫码登录对 Playwright 子进程是硬依赖。
+# 这里在应用导入阶段统一切到 Proactor，避免“接口都正常，唯独二维码通道必挂”的隐性环境问题。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 # 配置日志
 # 这里的 %(asctime)s 走的是进程所在系统时区，而不是 settings.APP_TIMEZONE。
@@ -47,6 +53,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
+    encryption_key_source = detect_setting_source("ENCRYPTION_KEY")
+    # 这里必须在启动期显式提示 ENCRYPTION_KEY 是否为固定来源。
+    # 否则当服务重启后旧密文突然无法解密时，排障现场只会看到“Cookie 损坏”，
+    # 但根因其实是密钥仍在走随机默认值，和业务登录链路无关。
+    logger.info(
+        "配置诊断: ENCRYPTION_KEY source=%s persistent=%s",
+        encryption_key_source,
+        encryption_key_source != "generated_default",
+    )
+    if encryption_key_source == "generated_default":
+        logger.warning(
+            "ENCRYPTION_KEY 尚未固定；当前进程使用运行期随机默认值，服务重启后旧 Cookie 与旧敏感密文可能无法解密"
+        )
+
     logger.info("正在初始化数据库...")
     await init_db()
     logger.info("数据库初始化完成")
@@ -94,7 +114,6 @@ from app.api.assets import router as assets_router
 from app.api.gacha import router as gacha_router
 from app.api.health_center import router as health_center_router
 from app.api.redeem import router as redeem_router
-from app.api.notes import router as notes_router
 from app.api.tasks import router as tasks_router
 from app.api.logs import router as logs_router
 from app.api.admin import router as admin_router
@@ -105,7 +124,6 @@ app.include_router(assets_router)
 app.include_router(gacha_router)
 app.include_router(health_center_router)
 app.include_router(redeem_router)
-app.include_router(notes_router)
 app.include_router(tasks_router)
 app.include_router(logs_router)
 app.include_router(admin_router)
@@ -119,26 +137,23 @@ async def qr_login_websocket(
     account_id: int | None = Query(default=None),
 ):
     """
-    扫码登录 WebSocket 端点
+    扫码登录 WebSocket 端点。
+
     流程：
     1. 前端连接 WebSocket
-    2. 后端启动 Playwright 会话，截取二维码图片
-    3. 通过 WebSocket 推送 base64 二维码图片
-    4. 轮询登录状态，推送状态更新
-    5. 登录成功后提取 Cookie 并保存
+    2. 后端启动网页登录二维码会话并推送二维码图片
+    3. 轮询扫码状态并向前端同步进度
+    4. 登录成功后提取网页登录 Cookie 并保存
+    5. 保存后返回成功结果，不再附带已下线能力的额外探测状态
     """
     await websocket.accept()
 
     session = qr_login_manager.create_session(session_id, user_id)
 
     try:
-        # 推送初始状态
         await websocket.send_json({"type": "status", "status": "initializing"})
-
-        # 启动浏览器会话
         await session.start()
 
-        # 获取二维码
         qr_image = await session.get_qr_image()
         if qr_image:
             await websocket.send_json({
@@ -153,95 +168,98 @@ async def qr_login_websocket(
             })
             return
 
-        # 轮询登录状态（最多 3 分钟）
-        max_polls = 90  # 每 2 秒一次，共 3 分钟
+        max_polls = 90
         for _ in range(max_polls):
             await asyncio.sleep(2)
-
             status = await session.poll_login_status()
             await websocket.send_json({"type": "status", "status": status})
 
             if status == "success":
-                # 登录成功，提取 Cookie
                 cookie_str = await session.extract_cookies()
-                if cookie_str:
-                    # 保存到数据库
-                    async with async_session() as db:
-                        token_info = LoginStateService.parse_login_tokens(cookie_str)
-                        if account_id is not None:
-                            account_result = await db.execute(
-                                select(MihoyoAccount).where(
-                                    MihoyoAccount.id == account_id,
-                                    MihoyoAccount.user_id == user_id,
-                                )
-                            )
-                            account = account_result.scalar_one_or_none()
-                            if account is None:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": "待刷新的账号不存在",
-                                })
-                                return
-                        else:
-                            account = MihoyoAccount(user_id=user_id)
-                            db.add(account)
-                            await db.flush()
-
-                        account.cookie_encrypted = encrypt_cookie(cookie_str)
-                        account.cookie_status = "valid"
-                        account.stoken_encrypted = (
-                            encrypt_cookie(token_info["stoken"]) if token_info["stoken"] else None
-                        )
-                        account.stuid = token_info["stuid"]
-                        account.mid = token_info["mid"]
-                        account.last_cookie_check = utc_now_naive()
-                        account.cookie_token_updated_at = utc_now_naive()
-                        account.last_refresh_status = "success"
-                        account.last_refresh_message = "登录成功并已更新登录态维护凭据"
-                        account.last_refresh_attempt_at = utc_now_naive()
-                        account.reauth_notified_at = None
-
-                        # 获取并保存游戏角色
-                        checkin_service = CheckinService(db)
-                        roles = await checkin_service.fetch_game_roles(cookie_str)
-                        # 这里必须复用同一业务角色的现有数据库行，不能简单删除后重建。
-                        # 否则 `TaskLog.game_role_id`、用户对角色的启停选择等本地状态都会在重新扫码后失效。
-                        await sync_account_roles(
-                            db=db,
-                            account_id=account.id,
-                            role_payloads=roles,
-                        )
-
-                        # 更新账号昵称
-                        if roles:
-                            account.nickname = roles[0].get("nickname", "")
-                            account.mihoyo_uid = roles[0].get("game_uid", "")
-
-                        await db.commit()
-                        await db.refresh(account)
-
-                    await websocket.send_json({
-                        "type": "success",
-                        "message": "登录成功",
-                        "account_id": account.id,
-                        "roles_count": len(roles),
-                    })
-                else:
+                if not cookie_str:
                     await websocket.send_json({
                         "type": "error",
-                        "message": "提取 Cookie 失败",
+                        "message": session.error_message or "提取 Cookie 失败",
                     })
+                    return
+
+                async with async_session() as db:
+                    token_info = LoginStateService.parse_login_tokens(cookie_str)
+                    if account_id is not None:
+                        account_result = await db.execute(
+                            select(MihoyoAccount).where(
+                                MihoyoAccount.id == account_id,
+                                MihoyoAccount.user_id == user_id,
+                            )
+                        )
+                        account = account_result.scalar_one_or_none()
+                        if account is None:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "待刷新的账号不存在",
+                            })
+                            return
+                    else:
+                        account = MihoyoAccount(user_id=user_id)
+                        db.add(account)
+                        await db.flush()
+
+                    account.cookie_encrypted = encrypt_cookie(cookie_str)
+                    account.cookie_status = "valid"
+                    account.stoken_encrypted = (
+                        encrypt_text(token_info["stoken"]) if token_info["stoken"] else None
+                    )
+                    account.stuid = token_info["stuid"]
+                    account.mid = token_info["mid"]
+                    account.last_cookie_check = utc_now_naive()
+                    account.cookie_token_updated_at = utc_now_naive()
+                    account.last_refresh_status = "success"
+                    # 用户当前能稳定依赖的是“网页登录态已更新”这件事。
+                    # 即便底层偶发拿到额外字段，也不再把它包装成自动续期或 App 凭据能力，
+                    # 以免后续维护者再次把不可稳定获得的数据误判成正式支持范围。
+                    account.last_refresh_message = "登录成功并已更新网页登录态"
+                    account.last_refresh_attempt_at = utc_now_naive()
+                    account.reauth_notified_at = None
+
+                    checkin_service = CheckinService(db)
+                    roles = await checkin_service.fetch_game_roles(cookie_str)
+                    await sync_account_roles(
+                        db=db,
+                        account_id=account.id,
+                        role_payloads=roles,
+                    )
+
+                    if roles:
+                        account.nickname = roles[0].get("nickname", "")
+                        account.mihoyo_uid = roles[0].get("game_uid", "")
+                    elif session.account_mihoyo_uid:
+                        account.mihoyo_uid = session.account_mihoyo_uid
+
+                    await db.commit()
+                    await db.refresh(account)
+
+                await websocket.send_json({
+                    "type": "success",
+                    "message": "登录成功",
+                    "account_id": account.id,
+                    "roles_count": len(roles),
+                })
                 break
 
-            elif status == "failed":
+            if status == "failed":
                 await websocket.send_json({
                     "type": "error",
                     "message": session.error_message or "登录失败",
                 })
                 break
 
+            if status == "timeout":
+                await websocket.send_json({
+                    "type": "timeout",
+                    "message": session.error_message or "扫码登录超时（3分钟），请重试",
+                })
+                break
         else:
-            # 超时
             await websocket.send_json({
                 "type": "timeout",
                 "message": "扫码登录超时（3分钟），请重试",
@@ -250,8 +268,6 @@ async def qr_login_websocket(
     except WebSocketDisconnect:
         logger.info(f"[{session_id}] WebSocket 连接断开")
     except Exception:
-        # WebSocket 异常日志里可能带浏览器环境、Cookie 处理细节或路径信息，不能直接透传到前端。
-        # 保留完整服务端堆栈用于排障，同时给用户固定提示，避免内部实现细节泄露。
         logger.exception("[%s] WebSocket 错误", session_id)
         try:
             await websocket.send_json({"type": "error", "message": "二维码登录通道异常，请关闭页面后重试"})
@@ -280,3 +296,5 @@ if os.path.exists(frontend_dist):
         if os.path.exists(index_file):
             return FileResponse(index_file)
         return {"detail": "前端文件未找到"}
+
+

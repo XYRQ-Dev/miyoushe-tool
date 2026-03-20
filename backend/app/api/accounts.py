@@ -1,17 +1,16 @@
 """
 米哈游账号管理 API
 - 获取当前用户的所有米哈游账号列表
-- 发起扫码登录（创建 Playwright 会话）
+- 发起扫码登录（创建二维码会话）
 - 删除账号
 - 刷新 Cookie
 """
 
 import uuid
 import logging
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.user import User
@@ -20,14 +19,17 @@ from app.models.gacha import GachaImportJob, GachaRecord
 from app.schemas.account import AccountResponse, AccountListResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
 from app.services.login_state import LoginStateService
-from app.services.qr_login import QrLoginManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/accounts", tags=["米哈游账号"])
 
 
-def _build_account_response(account: MihoyoAccount, roles: list[GameRole]) -> AccountResponse:
-    auto_refresh_available = LoginStateService.is_auto_refresh_available(account)
+async def _build_account_response(
+    *,
+    db: AsyncSession,
+    account: MihoyoAccount,
+    roles: list[GameRole],
+) -> AccountResponse:
     return AccountResponse(
         id=account.id,
         user_id=account.user_id,
@@ -38,7 +40,6 @@ def _build_account_response(account: MihoyoAccount, roles: list[GameRole]) -> Ac
         last_refresh_attempt_at=account.last_refresh_attempt_at,
         last_refresh_status=account.last_refresh_status,
         last_refresh_message=account.last_refresh_message,
-        auto_refresh_available=auto_refresh_available,
         reauth_notified_at=account.reauth_notified_at,
         created_at=account.created_at,
         game_roles=[
@@ -61,7 +62,7 @@ async def list_accounts(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取当前用户的所有米哈游账号"""
+    """获取当前用户的所有米哈游账号。"""
     result = await db.execute(
         select(MihoyoAccount)
         .where(MihoyoAccount.user_id == current_user.id)
@@ -69,14 +70,13 @@ async def list_accounts(
     )
     accounts = result.scalars().all()
 
-    # 加载每个账号的游戏角色
     account_responses = []
     for acc in accounts:
         roles_result = await db.execute(
             select(GameRole).where(GameRole.account_id == acc.id)
         )
         roles = roles_result.scalars().all()
-        resp = _build_account_response(acc, roles)
+        resp = await _build_account_response(db=db, account=acc, roles=roles)
         account_responses.append(resp)
 
     return AccountListResponse(accounts=account_responses, total=len(account_responses))
@@ -85,8 +85,8 @@ async def list_accounts(
 @router.post("/qr-login", response_model=QrLoginStartResponse)
 async def start_qr_login(current_user: User = Depends(get_current_user)):
     """
-    发起扫码登录会话
-    返回 session_id，前端通过 WebSocket 连接获取二维码图片
+    发起扫码登录会话。
+    返回 session_id，前端通过 WebSocket 连接获取二维码图片。
     """
     session_id = str(uuid.uuid4())
     return QrLoginStartResponse(session_id=session_id)
@@ -98,7 +98,7 @@ async def delete_account(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除米哈游账号及其关联的游戏角色"""
+    """删除米哈游账号及其关联的游戏角色。"""
     result = await db.execute(
         select(MihoyoAccount).where(
             MihoyoAccount.id == account_id,
@@ -109,7 +109,6 @@ async def delete_account(
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
 
-    # 删除关联的游戏角色
     roles = await db.execute(
         select(GameRole).where(GameRole.account_id == account_id)
     )
@@ -142,8 +141,8 @@ async def refresh_cookie(
     current_user: User = Depends(get_current_user),
 ):
     """
-    刷新指定账号的 Cookie（重新扫码）
-    返回新的 session_id，与 qr-login 流程一致
+    刷新指定账号的 Cookie（重新扫码）。
+    返回新的 session_id，与 qr-login 流程一致。
     """
     session_id = str(uuid.uuid4())
     return QrLoginStartResponse(
@@ -159,10 +158,10 @@ async def refresh_login_state(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    手动执行一次登录态维护。
+    手动执行一次登录态校验。
 
-    这个接口和“重新扫码登录”是两种不同语义：
-    - 这里优先尝试自动续期
+    当前实现只校验网页登录 Cookie 是否仍可用：
+    - 这里不会再尝试自动续期
     - `/refresh-cookie` 明确表示进入重新扫码流程
     """
     result = await db.execute(

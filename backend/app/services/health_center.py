@@ -24,8 +24,6 @@ from app.schemas.health_center import (
 )
 from app.services.checkin import is_checkin_supported_game
 from app.services.gacha import SUPPORTED_GACHA_GAME_CONFIGS
-from app.services.login_state import LoginStateService
-from app.services.notes import SUPPORTED_NOTE_GAME_CONFIGS
 from app.services.redeem import SUPPORTED_REDEEM_GAME_CONFIGS
 from app.utils.timezone import get_app_day_utc_range, get_current_app_date
 
@@ -107,7 +105,14 @@ class HealthCenterService:
                     latest_event_at=latest_event_at,
                 )
             )
-            events.extend(self._build_recent_events(account=account, logs=logs, health_level=health_level, health_reason=health_reason))
+            events.extend(
+                self._build_recent_events(
+                    account=account,
+                    logs=logs,
+                    health_level=health_level,
+                    health_reason=health_reason,
+                )
+            )
 
         contexts.sort(
             key=lambda item: (
@@ -149,24 +154,22 @@ class HealthCenterService:
         )
 
     def _get_recent_range(self) -> tuple[object, object]:
-        # 近 7 天统计必须按应用时区的业务日切分，而不是直接减去 168 小时。
-        # 否则临近零点时会出现“同一条日志在日历里算今天、在健康中心里算昨天”的口径撕裂。
         start_day = get_current_app_date() - timedelta(days=6)
         return get_app_day_utc_range(start_day)[0], get_app_day_utc_range(get_current_app_date())[1]
 
     def _determine_health(self, *, account: MihoyoAccount, logs: list[TaskLog]) -> tuple[str, str]:
         if account.cookie_status == "reauth_required":
-            return "danger", "自动续期已失效，需要重新扫码登录"
+            return "danger", "登录态失效，需要重新扫码登录"
 
         failed_count = sum(1 for log in logs if log.status == "failed")
         risk_count = sum(1 for log in logs if log.status == "risk")
         has_recent_checkin_issue = failed_count > 0 or risk_count > 0
 
         if account.cookie_status in ("expired", "refreshing"):
-            return "warning", "当前登录态需要关注，建议尽快执行登录态维护"
+            return "warning", "当前登录态需要关注，建议尽快重新扫码或再次校验"
 
         if account.last_refresh_status in ("warning", "network_error"):
-            return "warning", account.last_refresh_message or "最近一次登录态维护存在异常"
+            return "warning", account.last_refresh_message or "最近一次登录态校验存在异常"
 
         if has_recent_checkin_issue:
             return "warning", f"近 7 天存在 {failed_count} 次失败、{risk_count} 次风险签到"
@@ -174,7 +177,7 @@ class HealthCenterService:
         if account.cookie_status == "valid" and self._has_success_evidence(account=account, logs=logs):
             return "healthy", "登录态有效，近 7 天无失败签到"
 
-        return "unknown", "当前尚无成功签到或维护记录，暂未完成健康判定"
+        return "unknown", "当前尚无成功签到或登录态校验记录，暂未完成健康判定"
 
     def _has_success_evidence(self, *, account: MihoyoAccount, logs: list[TaskLog]) -> bool:
         if any(log.status in ("success", "already_signed") for log in logs):
@@ -209,7 +212,6 @@ class HealthCenterService:
             last_refresh_status=account.last_refresh_status,
             last_refresh_message=account.last_refresh_message,
             last_refresh_attempt_at=account.last_refresh_attempt_at,
-            auto_refresh_available=LoginStateService.is_auto_refresh_available(account),
             game_role_count=len(roles),
             supported_games=self._collect_supported_games(roles),
             supported_assets=self._collect_supported_assets(roles),
@@ -286,16 +288,11 @@ class HealthCenterService:
         assets: list[str] = []
         if any(role.is_enabled and is_checkin_supported_game(role.game_biz) for role in roles):
             assets.append("checkin")
-        if any(role.is_enabled and self._role_matches_note(role) for role in roles):
-            assets.append("notes")
         if any(self._role_matches_gacha(role) for role in roles):
             assets.append("gacha")
         if any(role.is_enabled and self._role_matches_redeem(role) for role in roles):
             assets.append("redeem")
         return assets
-
-    def _role_matches_note(self, role: GameRole) -> bool:
-        return any(role.game_biz.startswith(config.role_prefixes) for config in SUPPORTED_NOTE_GAME_CONFIGS)
 
     def _role_matches_gacha(self, role: GameRole) -> bool:
         return any(

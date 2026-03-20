@@ -1,6 +1,6 @@
 """
 任务调度服务
-使用 APScheduler 实现定时签到和 Cookie 过期检测
+使用 APScheduler 实现定时签到和网页登录态巡检
 """
 
 import logging
@@ -119,14 +119,14 @@ class SchedulerService:
         # 加载所有用户的调度配置
         await self._load_all_schedules()
 
-        # 添加 Cookie 过期检测任务（每天凌晨 3 点执行）
+        # 添加网页登录态巡检任务（每天凌晨 3 点执行）
         self.scheduler.add_job(
             self._check_cookies,
             CronTrigger(hour=3, minute=0),
             id="cookie_check",
             replace_existing=True,
         )
-        logger.info("Cookie 过期检测任务已注册（每天 03:00）")
+        logger.info("网页登录态巡检任务已注册（每天 03:00）")
 
     async def _load_all_schedules(self):
         """从数据库加载所有启用的调度配置"""
@@ -248,12 +248,12 @@ class SchedulerService:
 
     async def _check_cookies(self):
         """
-        检测并维护所有账号的登录态。
+        检测所有账号的网页登录态。
 
-        这里只做统一调度入口，不再把“过期检测”和“自动续期”拆成两套逻辑，
+        这里只做统一调度入口，不再把“过期检测”“自动续期”“签到前置判断”拆成多套逻辑，
         否则账号页、定时任务和签到前置检查很容易看到彼此矛盾的状态。
         """
-        logger.info("开始检测并维护账号登录态...")
+        logger.info("开始巡检账号网页登录态...")
 
         async with async_session() as db:
             result = await db.execute(
@@ -266,7 +266,7 @@ class SchedulerService:
             for account in accounts:
                 await login_state_service.refresh_account_login_state(account)
 
-            logger.info(f"登录态维护完成，共处理 {len(accounts)} 个账号")
+            logger.info(f"网页登录态巡检完成，共处理 {len(accounts)} 个账号")
 
     def stop(self):
         """停止调度器"""

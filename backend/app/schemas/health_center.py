@@ -30,7 +30,6 @@ class HealthAccountResponse(BaseModel):
     last_refresh_status: str | None = None
     last_refresh_message: str | None = None
     last_refresh_attempt_at: datetime | None = None
-    auto_refresh_available: bool
     game_role_count: int
     supported_games: list[str]
     supported_assets: list[str]

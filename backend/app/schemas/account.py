@@ -27,7 +27,6 @@ class AccountResponse(BaseModel):
     last_refresh_attempt_at: Optional[datetime] = None
     last_refresh_status: Optional[str] = None
     last_refresh_message: Optional[str] = None
-    auto_refresh_available: bool = False
     reauth_notified_at: Optional[datetime] = None
     created_at: datetime
     game_roles: List[GameRoleResponse] = []

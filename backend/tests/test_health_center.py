@@ -11,7 +11,7 @@ from app.database import Base
 from app.models.account import GameRole, MihoyoAccount
 from app.models.task_log import TaskLog
 from app.models.user import User
-from app.utils.crypto import encrypt_cookie, encrypt_text
+from app.utils.crypto import encrypt_cookie
 from app.utils.timezone import utc_now_naive
 
 
@@ -48,7 +48,6 @@ class HealthCenterTests(unittest.IsolatedAsyncioTestCase):
         mihoyo_uid: str,
         cookie_status: str = "valid",
         with_cookie: bool = True,
-        with_auto_refresh: bool = False,
         last_refresh_status: str | None = None,
         last_refresh_message: str | None = None,
         last_refresh_attempt_days_ago: int | None = None,
@@ -60,9 +59,6 @@ class HealthCenterTests(unittest.IsolatedAsyncioTestCase):
             mihoyo_uid=mihoyo_uid,
             cookie_status=cookie_status,
             cookie_encrypted=encrypt_cookie("ltuid=10001; cookie_token=test-token") if with_cookie else None,
-            stoken_encrypted=encrypt_text("v1_test_stoken") if with_auto_refresh else None,
-            stuid="10001" if with_auto_refresh else None,
-            mid="mid-token" if with_auto_refresh else None,
             last_refresh_status=last_refresh_status,
             last_refresh_message=last_refresh_message,
             last_refresh_attempt_at=(
@@ -108,9 +104,8 @@ class HealthCenterTests(unittest.IsolatedAsyncioTestCase):
                 user_id=user.id,
                 nickname="稳定账号",
                 mihoyo_uid="10001",
-                with_auto_refresh=True,
                 last_refresh_status="success",
-                last_refresh_message="自动续期正常",
+                last_refresh_message="登录态校验通过",
                 last_refresh_attempt_days_ago=1,
             )
             warning_account = await self._create_account(
@@ -128,8 +123,8 @@ class HealthCenterTests(unittest.IsolatedAsyncioTestCase):
                 nickname="危险账号",
                 mihoyo_uid="10003",
                 cookie_status="reauth_required",
-                last_refresh_status="warning",
-                last_refresh_message="自动续期失败，需要重新扫码",
+                last_refresh_status="reauth_required",
+                last_refresh_message="Cookie 已过期，请重新扫码更新网页登录态",
                 last_refresh_attempt_days_ago=0,
             )
             foreign_account = await self._create_account(
@@ -194,16 +189,15 @@ class HealthCenterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(account_map[danger_account.id].health_level, "danger")
         self.assertEqual(account_map[unknown_account.id].health_level, "unknown")
 
-        self.assertEqual(account_map[healthy_account.id].supported_assets, ["checkin", "notes", "gacha", "redeem"])
+        self.assertEqual(account_map[healthy_account.id].supported_assets, ["checkin", "gacha", "redeem"])
         self.assertEqual(account_map[warning_account.id].supported_assets, ["checkin"])
-        self.assertEqual(account_map[danger_account.id].supported_assets, ["checkin", "notes", "gacha", "redeem"])
-        self.assertEqual(account_map[unknown_account.id].supported_assets, ["checkin", "notes", "gacha", "redeem"])
+        self.assertEqual(account_map[danger_account.id].supported_assets, ["checkin", "gacha", "redeem"])
+        self.assertEqual(account_map[unknown_account.id].supported_assets, ["checkin", "gacha", "redeem"])
 
-        self.assertTrue(account_map[healthy_account.id].auto_refresh_available)
         self.assertEqual(account_map[warning_account.id].recent_checkin.failed_count_7d, 1)
         self.assertEqual(account_map[healthy_account.id].recent_checkin.success_count_7d, 1)
         self.assertIn("重新扫码", account_map[danger_account.id].health_reason)
-        self.assertIn("暂未完成健康判定", account_map[unknown_account.id].health_reason)
+        self.assertIn("登录态校验记录", account_map[unknown_account.id].health_reason)
 
         self.assertGreaterEqual(len(response.recent_events), 2)
         self.assertEqual(response.recent_events[0].account_id, danger_account.id)

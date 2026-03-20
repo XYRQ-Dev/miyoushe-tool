@@ -106,6 +106,11 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_register_returns_visible_menu_keys_consistent_with_get_me(self):
         async with await self._new_session() as session:
+            # 首个注册用户按产品约定会自动升为管理员。
+            # 这里先放一个已存在用户，确保本用例验证的是“普通用户注册后的菜单可见性”。
+            session.add(User(username="bootstrap-admin", password_hash="x", role="admin", is_active=True))
+            await session.commit()
+
             registered = await register(
                 UserCreate(username="visible-menu-user", password="password123"),
                 db=session,
@@ -117,9 +122,8 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(registered.visible_menu_keys, me.visible_menu_keys)
         self.assertIn("dashboard", registered.visible_menu_keys)
-        self.assertIn("notes", registered.visible_menu_keys)
-        self.assertIn("admin_users", registered.visible_menu_keys)
-        self.assertIn("admin_menu_management", registered.visible_menu_keys)
+        self.assertNotIn("admin_users", registered.visible_menu_keys)
+        self.assertNotIn("admin_menu_management", registered.visible_menu_keys)
 
     async def test_get_me_persists_system_settings_for_new_database(self):
         async with await self._new_session() as session:
@@ -1026,38 +1030,26 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(read_back.smtp_password_configured)
             self.assertEqual(read_back.smtp_user, "mailer@example.com")
 
-    async def test_refresh_account_login_state_restores_valid_status_after_auto_refresh(self):
+    async def test_refresh_account_login_state_marks_valid_when_cookie_verifies(self):
         async with await self._new_session() as session:
             account = MihoyoAccount(
                 user_id=1,
                 cookie_encrypted="encrypted-cookie",
                 cookie_status="expired",
-                stoken_encrypted=encrypt_text("v2_test_stoken"),
-                stuid="123456789",
-                mid="mid-123",
             )
             session.add(account)
             await session.commit()
 
             service = LoginStateService(session)
-            service.verify_cookie = AsyncMock(side_effect=[
-                {"state": "expired", "message": "Cookie 已过期"},
-                {"state": "valid", "message": "登录态有效"},
-            ])
-            service.refresh_cookie_token = AsyncMock(return_value={
-                "success": True,
-                "message": "自动续期成功",
-                "cookie": "ltuid=1; cookie_token=new-token",
-            })
+            service.verify_cookie = AsyncMock(return_value={"state": "valid", "message": "登录态有效"})
 
             with patch("app.services.login_state.notification_service.send_reauth_required_notification", new_callable=AsyncMock) as mock_notify:
                 result = await service.refresh_account_login_state(account)
 
         self.assertEqual(result["cookie_status"], "valid")
         self.assertEqual(account.cookie_status, "valid")
-        self.assertEqual(account.last_refresh_status, "success")
-        self.assertIn("自动续期成功", account.last_refresh_message)
-        self.assertIsNotNone(account.cookie_token_updated_at)
+        self.assertEqual(account.last_refresh_status, "valid")
+        self.assertEqual(account.last_refresh_message, "登录态有效")
         mock_notify.assert_not_awaited()
 
     async def test_refresh_account_login_state_marks_reauth_required_and_notifies_once(self):
@@ -1078,20 +1070,12 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
                 user_id=user.id,
                 cookie_encrypted="encrypted-cookie",
                 cookie_status="expired",
-                stoken_encrypted=encrypt_text("v2_test_stoken"),
-                stuid="123456789",
-                mid="mid-123",
             )
             session.add(account)
             await session.commit()
 
             service = LoginStateService(session)
             service.verify_cookie = AsyncMock(return_value={"state": "expired", "message": "Cookie 已过期"})
-            service.refresh_cookie_token = AsyncMock(return_value={
-                "success": False,
-                "state": "reauth_required",
-                "message": "续期凭据已失效，需要重新扫码",
-            })
 
             with patch("app.services.login_state.notification_service.send_reauth_required_notification", new_callable=AsyncMock) as mock_notify:
                 first = await service.refresh_account_login_state(account)
@@ -1115,11 +1099,8 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
                 mihoyo_uid="10001",
                 cookie_encrypted="encrypted-cookie",
                 cookie_status="reauth_required",
-                stoken_encrypted=encrypt_text("v2_test_stoken"),
-                stuid="123456789",
-                mid="mid-123",
                 last_refresh_status="reauth_required",
-                last_refresh_message="续期凭据已失效，需要重新扫码",
+                last_refresh_message="Cookie 已过期，请重新扫码更新网页登录态",
             )
             session.add(account)
             await session.commit()
@@ -1127,9 +1108,8 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             response = await list_accounts(current_user=user, db=session)
 
         self.assertEqual(response.total, 1)
-        self.assertTrue(response.accounts[0].auto_refresh_available)
         self.assertEqual(response.accounts[0].last_refresh_status, "reauth_required")
-        self.assertEqual(response.accounts[0].last_refresh_message, "续期凭据已失效，需要重新扫码")
+        self.assertEqual(response.accounts[0].last_refresh_message, "Cookie 已过期，请重新扫码更新网页登录态")
 
     async def test_refresh_login_state_endpoint_returns_updated_status(self):
         async with await self._new_session() as session:
@@ -1150,14 +1130,13 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
                 mock_service.refresh_account_login_state = AsyncMock(return_value={
                     "account_id": account.id,
                     "cookie_status": "reauth_required",
-                    "message": "续期凭据已失效，需要重新扫码",
-                    "auto_refresh_available": False,
+                    "message": "Cookie 已过期，请重新扫码更新网页登录态",
                 })
 
                 response = await refresh_login_state(account.id, current_user=user, db=session)
 
         self.assertEqual(response["cookie_status"], "reauth_required")
-        self.assertFalse(response["auto_refresh_available"])
+        self.assertEqual(response["message"], "Cookie 已过期，请重新扫码更新网页登录态")
 
     async def test_notification_service_sends_reauth_required_email_once_until_recovered(self):
         async with await self._new_session() as session:
@@ -1871,11 +1850,9 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
             user_response = await get_me(current_user=user, db=session)
 
         self.assertIn("dashboard", admin_response.visible_menu_keys)
-        self.assertIn("notes", admin_response.visible_menu_keys)
         self.assertIn("admin_users", admin_response.visible_menu_keys)
         self.assertIn("admin_menu_management", admin_response.visible_menu_keys)
         self.assertIn("dashboard", user_response.visible_menu_keys)
-        self.assertIn("notes", user_response.visible_menu_keys)
         self.assertNotIn("admin_users", user_response.visible_menu_keys)
         self.assertNotIn("admin_menu_management", user_response.visible_menu_keys)
 
@@ -1905,7 +1882,6 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         by_key = {item.key: item for item in updated.items}
         self.assertFalse(by_key["gacha"].user_visible)
         self.assertFalse(by_key["admin_users"].admin_visible)
-        self.assertFalse(by_key["notes"].navigable)
         self.assertTrue(by_key["admin_menu_management"].admin_visible)
         self.assertFalse(by_key["admin_menu_management"].editable)
         self.assertEqual(len(read_back.items), len(updated.items))
@@ -1913,19 +1889,6 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("gacha", admin_response.visible_menu_keys)
         self.assertNotIn("admin_users", admin_response.visible_menu_keys)
         self.assertIn("admin_menu_management", admin_response.visible_menu_keys)
-
-    async def test_get_menu_visibility_exposes_notes_path_as_module_placeholder(self):
-        async with await self._new_session() as session:
-            admin = User(username="notes-path-admin", password_hash="x", role="admin", is_active=True)
-            session.add(admin)
-            await session.commit()
-            await session.refresh(admin)
-
-            response = await get_menu_visibility(admin=admin, db=session)
-
-        by_key = {item.key: item for item in response.items}
-        self.assertEqual(by_key["notes"].path, "[module] dashboard-notes")
-        self.assertFalse(by_key["notes"].navigable)
 
     async def test_update_menu_visibility_rejects_unknown_or_guarded_keys(self):
         async with await self._new_session() as session:

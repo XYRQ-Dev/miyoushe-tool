@@ -26,12 +26,12 @@
       <div class="summary-card summary-card-warning">
         <div class="summary-label">预警账号</div>
         <div class="summary-value">{{ overview.summary.warning_accounts }}</div>
-        <div class="summary-note">存在失败签到或最近维护异常</div>
+        <div class="summary-note">存在失败签到或最近校验异常</div>
       </div>
       <div class="summary-card summary-card-danger">
         <div class="summary-label">需重登</div>
         <div class="summary-value">{{ overview.summary.reauth_required_accounts }}</div>
-        <div class="summary-note">自动续期已失效，需要重新扫码</div>
+        <div class="summary-note">登录态失效，需要重新扫码</div>
       </div>
     </div>
 
@@ -105,11 +105,9 @@
             <div class="health-panel" :class="`health-panel-${account.health_level}`">
               <div class="health-title">{{ account.health_reason }}</div>
               <div class="health-meta">
-                <span class="meta-chip">
-                  {{ account.auto_refresh_available ? '支持自动续期' : '仅支持重新扫码' }}
-                </span>
+                <span class="meta-chip">网页登录 Cookie</span>
                 <span v-if="account.last_refresh_attempt_at" class="meta-text">
-                  最近维护 {{ formatDateTime(account.last_refresh_attempt_at) }}
+                  最近校验 {{ formatDateTime(account.last_refresh_attempt_at) }}
                 </span>
               </div>
               <div v-if="account.last_refresh_message" class="health-note">
@@ -154,9 +152,9 @@
                 size="small"
                 plain
                 :loading="maintainingAccountId === account.account_id"
-                @click="handleMaintain(account)"
+                @click="handleCheck(account)"
               >
-                校验并续期
+                校验登录态
               </el-button>
               <el-button
                 size="small"
@@ -165,14 +163,6 @@
                 @click="handleReauth(account)"
               >
                 {{ account.cookie_status === 'reauth_required' ? '重新扫码' : '扫码更新凭据' }}
-              </el-button>
-              <el-button
-                size="small"
-                plain
-                :disabled="!account.supported_assets.includes('notes')"
-                @click="jumpToAsset('/', account.account_id)"
-              >
-                实时便笺
               </el-button>
               <el-button
                 size="small"
@@ -282,7 +272,6 @@ type HealthAccount = {
   last_refresh_status?: string | null
   last_refresh_message?: string | null
   last_refresh_attempt_at?: string | null
-  auto_refresh_available: boolean
   game_role_count: number
   supported_games: string[]
   supported_assets: string[]
@@ -357,7 +346,7 @@ const headlineSubtitle = computed(() => {
     return '有账号需要重新登录，建议优先处理。'
   }
   if (overview.value.summary.warning_accounts > 0) {
-    return '有账号近期出现签到失败或维护异常，建议先查看下方详情。'
+    return '有账号近期出现签到失败或校验异常，建议先查看下方详情。'
   }
   if (overview.value.summary.total_accounts > 0) {
     return '所有账号目前状态正常，可继续使用相关功能。'
@@ -395,7 +384,6 @@ function getHealthTagType(level: string) {
 
 function getAssetLabel(asset: string) {
   if (asset === 'checkin') return '签到'
-  if (asset === 'notes') return '便笺'
   if (asset === 'gacha') return '抽卡'
   if (asset === 'redeem') return '兑换码'
   return asset
@@ -439,11 +427,11 @@ async function loadOverview() {
   }
 }
 
-async function handleMaintain(account: HealthAccount) {
+async function handleCheck(account: HealthAccount) {
   maintainingAccountId.value = account.account_id
   try {
-    const { data } = await accountApi.refreshLoginState(account.account_id)
-    ElMessage.success(data.message || data.last_refresh_message || '登录态维护已完成')
+    const { data } = await accountApi.checkLoginState(account.account_id)
+    ElMessage.success(data.message || data.last_refresh_message || '登录态校验已完成')
     await loadOverview()
   } finally {
     maintainingAccountId.value = null

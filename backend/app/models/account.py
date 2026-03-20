@@ -28,6 +28,9 @@ class MihoyoAccount(Base):
     cookie_status = Column(String(20), default="valid")
     last_cookie_check = Column(DateTime, nullable=True)
     cookie_token_updated_at = Column(DateTime, nullable=True)
+    # 这三列的字段名来自历史“登录态维护/续期”设计，当前为了兼容旧库与现有接口继续沿用。
+    # 但自 2026-03 起，业务语义已收敛为“最近一次登录态校验结果”，后续维护时不要再把它们
+    # 默认理解成“系统一定会自动续期成功”的承诺。
     last_refresh_attempt_at = Column(DateTime, nullable=True)
     last_refresh_status = Column(String(30), nullable=True)
     last_refresh_message = Column(Text, nullable=True)

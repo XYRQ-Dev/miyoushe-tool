@@ -22,7 +22,7 @@
         <div class="status-panel-desc">{{ statusDescription }}</div>
       </div>
       <div class="status-panel-meta">
-        <span class="meta-chip">{{ autoRefreshText }}</span>
+        <span class="meta-chip">网页登录 Cookie</span>
         <span v-if="lastRefreshText" class="meta-text">{{ lastRefreshText }}</span>
       </div>
       <div v-if="account.last_refresh_message" class="status-panel-note">
@@ -30,8 +30,7 @@
       </div>
     </div>
 
-    <!-- 游戏角色列表 -->
-    <div class="roles-section" v-if="account.game_roles?.length">
+    <div v-if="account.game_roles?.length" class="roles-section">
       <div class="section-title">绑定角色</div>
       <div class="role-list">
         <div v-for="role in account.game_roles" :key="role.id" class="role-item">
@@ -42,14 +41,13 @@
         </div>
       </div>
     </div>
-    <div class="roles-section" v-else>
+    <div v-else class="roles-section">
       <el-empty description="暂无游戏角色" :image-size="40" />
     </div>
 
-    <!-- 操作按钮 -->
     <div class="card-actions">
-      <el-button size="small" plain :icon="RefreshRight" @click="$emit('maintain')">
-        校验并续期
+      <el-button size="small" plain :icon="RefreshRight" @click="$emit('check')">
+        校验登录态
       </el-button>
       <el-button size="small" type="primary" :icon="Refresh" @click="$emit('reauth')">
         {{ account.cookie_status === 'reauth_required' ? '重新扫码登录' : '扫码更新凭据' }}
@@ -70,11 +68,8 @@ const props = defineProps<{
   account: any
 }>()
 
-defineEmits(['maintain', 'reauth', 'delete'])
+defineEmits(['check', 'reauth', 'delete'])
 
-// 这里的前端支持名单必须与后端实际放开的签到能力保持一致。
-// 如果只改后端不改这里，用户会看到“明明能签却仍显示未适配”；反过来若前端先放开，
-// 又会把仍未接入的游戏误导成可用状态，增加排障成本。
 const supportedCheckinGames = new Set(['hk4e_cn', 'hk4e_bilibili', 'hkrpg_cn', 'hkrpg_bilibili', 'bh3_cn', 'nap_cn'])
 
 function isCheckinSupported(gameBiz: string) {
@@ -99,7 +94,7 @@ const statusClass = computed(() => {
 const statusText = computed(() => {
   switch (props.account.cookie_status) {
     case 'valid': return 'Cookie 有效'
-    case 'refreshing': return '正在维护'
+    case 'refreshing': return '正在校验'
     case 'expired': return 'Cookie 已过期'
     case 'reauth_required': return '需要重登'
     default: return '状态未知'
@@ -119,9 +114,9 @@ const panelClass = computed(() => {
 const statusTitle = computed(() => {
   switch (props.account.cookie_status) {
     case 'valid': return '登录态稳定'
-    case 'refreshing': return '系统正在尝试恢复登录态'
-    case 'expired': return '登录态需要尽快维护'
-    case 'reauth_required': return '自动续期已失效'
+    case 'refreshing': return '系统正在校验登录态'
+    case 'expired': return '登录态需要重新扫码'
+    case 'reauth_required': return '登录态已失效'
     default: return '尚未完成状态确认'
   }
 })
@@ -131,18 +126,14 @@ const statusDescription = computed(() => {
     case 'valid':
       return '当前账号可以正常参与签到任务。'
     case 'refreshing':
-      return '建议稍后刷新账号列表，查看最新维护结果。'
+      return '建议稍后刷新账号列表，查看最新校验结果。'
     case 'expired':
-      return '可以先尝试“校验并续期”；若失败，再重新扫码。'
+      return '当前网页登录态已不可用，请尽快重新扫码更新凭据。'
     case 'reauth_required':
-      return '系统已无法自动恢复该账号，请尽快重新扫码登录。'
+      return '系统已确认该账号需要重新扫码登录。'
     default:
-      return '当前还没有足够信息判断账号是否可自动续期。'
+      return '当前还没有足够信息判断账号网页登录态是否可用。'
   }
-})
-
-const autoRefreshText = computed(() => {
-  return props.account.auto_refresh_available ? '支持自动续期' : '仅支持重新扫码'
 })
 
 function formatDateTime(value?: string) {
@@ -159,7 +150,7 @@ function formatDateTime(value?: string) {
 
 const lastRefreshText = computed(() => {
   if (props.account.last_refresh_attempt_at) {
-    return `最近维护 ${formatDateTime(props.account.last_refresh_attempt_at)}`
+    return `最近校验 ${formatDateTime(props.account.last_refresh_attempt_at)}`
   }
   if (props.account.last_cookie_check) {
     return `最近校验 ${formatDateTime(props.account.last_cookie_check)}`

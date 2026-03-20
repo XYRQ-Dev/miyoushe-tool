@@ -182,8 +182,8 @@ LOGIN_STATE_EMAIL_TEMPLATE = Template("""
     </div>
     <div class="content">
         <div class="alert">
-            <div class="title">自动续期已失效</div>
-            <div class="desc">系统已经尝试自动恢复该账号的登录态，但当前续期凭据不可用。为避免后续签到持续失败，请尽快在账号中心重新扫码。</div>
+            <div class="title">网页登录态已失效</div>
+            <div class="desc">系统已经确认该账号的网页登录 Cookie 不再可用。为避免后续签到持续失败，请尽快在账号中心重新扫码更新网页登录态。</div>
         </div>
         <div class="meta">
             <div class="meta-row"><div class="meta-label">账号</div><div class="meta-value">{{ account_name }}</div></div>
@@ -193,7 +193,7 @@ LOGIN_STATE_EMAIL_TEMPLATE = Template("""
         </div>
         <div class="action">
             <div class="title">建议操作</div>
-            <div class="desc">打开账号中心，找到该账号后点击“重新扫码登录”，重新完成一次米游社扫码即可恢复自动签到与登录态维护。</div>
+            <div class="desc">打开账号中心，找到该账号后点击“重新扫码登录”，重新完成一次米游社扫码即可恢复自动签到所需的网页登录态。</div>
         </div>
     </div>
     <div class="footer">此邮件由米游社自动签到系统发送</div>
@@ -399,7 +399,7 @@ class NotificationService:
         """
         发送“账号需要重新扫码”的登录态告警邮件。
 
-        这类通知只在账号明确失去自动续期能力时发送，不能和普通签到失败共用同一模板；
+        这类通知只在账号明确失去网页登录态时发送，不能和普通签到失败共用同一模板；
         否则用户看到的仍会是“某次签到失败”，无法意识到后续所有定时任务都会继续失败。
         """
         if account.reauth_notified_at:
@@ -475,12 +475,12 @@ class NotificationService:
     async def _send_login_state_email(self, to_email: str, account: MihoyoAccount, smtp_config: dict):
         """发送登录态失效通知邮件。"""
         today = date.today().isoformat()
-        subject = f"[米游社登录态] 账号需要重新扫码 - {today}"
+        subject = f"[米游社登录态] 网页登录态需要重新扫码 - {today}"
         html_content = LOGIN_STATE_EMAIL_TEMPLATE.render(
             today=today,
             account_name=account.nickname or f"账号#{account.id}",
             account_uid=account.mihoyo_uid or "-",
-            message=account.last_refresh_message or "自动续期凭据已失效",
+            message=account.last_refresh_message or "网页登录态已失效，需要重新扫码",
         )
 
         msg = MIMEMultipart("alternative")

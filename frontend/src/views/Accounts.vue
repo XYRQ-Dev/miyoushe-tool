@@ -4,7 +4,7 @@
       <div class="page-title-group">
         <div class="page-kicker">Account Console</div>
         <h2 class="page-title">账号管理</h2>
-        <p class="page-desc">绑定账号、更新登录状态，并查看每个账号下的角色信息。</p>
+        <p class="page-desc">绑定账号、校验网页登录状态，并查看每个账号下的角色信息。</p>
       </div>
       <div class="page-actions">
         <el-button type="primary" :icon="Plus" @click="handleAddAccount">
@@ -27,7 +27,7 @@
         v-for="account in accounts"
         :key="account.id"
         :account="account"
-        @maintain="handleMaintainLoginState(account)"
+        @check="handleCheckLoginState(account)"
         @reauth="handleRefreshCookie(account)"
         @delete="handleDelete(account)"
       />
@@ -89,10 +89,10 @@ async function handleRefreshCookie(account: any) {
   }
 }
 
-async function handleMaintainLoginState(account: any) {
+async function handleCheckLoginState(account: any) {
   try {
-    const { data } = await accountApi.refreshLoginState(account.id)
-    const updatedMessage = data.message || data.last_refresh_message || '登录态维护已完成'
+    const { data } = await accountApi.checkLoginState(account.id)
+    const updatedMessage = data.message || data.last_refresh_message || '登录态校验已完成'
     ElMessage.success(updatedMessage)
     await loadAccounts()
   } catch (e) {

@@ -23,11 +23,6 @@
         <div class="summary-value">{{ overview.summary.total_roles }}</div>
         <div class="summary-note">已识别到的全部角色数量</div>
       </div>
-      <div class="summary-card summary-card-accent">
-        <div class="summary-label">便笺可接入角色</div>
-        <div class="summary-value">{{ overview.summary.note_supported_roles }}</div>
-        <div class="summary-note">具备实时便笺能力的角色数量</div>
-      </div>
       <div class="summary-card summary-card-warm">
         <div class="summary-label">已归档抽卡档案</div>
         <div class="summary-value">{{ overview.summary.gacha_archived_games }}</div>
@@ -100,7 +95,7 @@
                 <div class="account-meta">
                   米游社 UID {{ account.mihoyo_uid || '-' }}
                   <span>· {{ account.roles.length }} 个角色</span>
-                  <span v-if="account.last_refresh_status">· 最近维护 {{ getRefreshText(account.last_refresh_status) }}</span>
+                  <span v-if="account.last_refresh_status">· 最近校验 {{ getRefreshText(account.last_refresh_status) }}</span>
                 </div>
               </div>
             </div>
@@ -110,15 +105,11 @@
                 v-for="role in account.roles"
                 :key="role.role_id"
                 class="role-card"
-                :class="`tone-${role.notes_status}`"
               >
                 <div class="role-card-head">
                   <div>
                     <div class="role-game-row">
                       <span class="role-game-chip">{{ role.game_name }}</span>
-                      <el-tag size="small" round :type="getNotesTagType(role.notes_status)">
-                        {{ getNotesStatusText(role.notes_status) }}
-                      </el-tag>
                     </div>
                     <div class="role-name">{{ role.nickname || role.game_uid }}</div>
                     <div class="role-meta">
@@ -142,13 +133,6 @@
                       {{ getCheckinNote(role.recent_checkin.last_message, role.recent_checkin.last_executed_at) }}
                     </div>
                   </div>
-                  <div class="status-card">
-                    <div class="status-label">便笺状态</div>
-                    <div class="status-value">{{ getNotesStatusText(role.notes_status) }}</div>
-                    <div class="status-note">
-                      {{ getNotesHint(role.notes_status) }}
-                    </div>
-                  </div>
                 </div>
 
                 <div class="chip-group">
@@ -165,14 +149,6 @@
                 </div>
 
                 <div class="action-row">
-                  <el-button
-                    size="small"
-                    plain
-                    :disabled="!role.supported_assets.includes('notes')"
-                    @click="jumpToNotes(account.account_id)"
-                  >
-                    实时便笺
-                  </el-button>
                   <el-button
                     size="small"
                     plain
@@ -224,7 +200,6 @@ type RoleAsset = {
   level?: number | null
   is_enabled: boolean
   supported_assets: string[]
-  notes_status: string
   has_gacha_archive: boolean
   recent_checkin: RoleAssetCheckin
 }
@@ -243,7 +218,6 @@ type RoleAssetOverview = {
   summary: {
     total_accounts: number
     total_roles: number
-    note_supported_roles: number
     gacha_archived_games: number
   }
   accounts: RoleAssetAccount[]
@@ -258,7 +232,6 @@ const overview = ref<RoleAssetOverview>({
   summary: {
     total_accounts: 0,
     total_roles: 0,
-    note_supported_roles: 0,
     gacha_archived_games: 0,
   },
   accounts: [],
@@ -294,7 +267,7 @@ const headlineSubtitle = computed(() => {
   if (!overview.value.summary.total_roles) {
     return '先绑定账号并同步角色信息，之后就能查看角色信息。'
   }
-  return `其中 ${overview.value.summary.note_supported_roles} 个角色可接入便笺，${overview.value.summary.gacha_archived_games} 组账号游戏已归档抽卡记录。`
+  return `${overview.value.summary.gacha_archived_games} 组账号游戏已归档抽卡记录。`
 })
 
 async function loadOverview() {
@@ -323,6 +296,7 @@ function getCookieTagType(status: string) {
 
 function getRefreshText(status?: string | null) {
   if (status === 'success') return '成功'
+  if (status === 'valid') return '有效'
   if (status === 'warning') return '预警'
   if (status === 'network_error') return '网络异常'
   if (status === 'reauth_required') return '需重登'
@@ -344,27 +318,8 @@ function getCheckinNote(message?: string | null, executedAt?: string | null) {
   return `${formatDateTime(executedAt)} · ${message || '已记录最近一次签到结果'}`
 }
 
-function getNotesStatusText(status: string) {
-  if (status === 'available') return '可直达'
-  if (status === 'login_required') return '需刷新登录'
-  return '暂不支持'
-}
-
-function getNotesTagType(status: string) {
-  if (status === 'available') return 'success'
-  if (status === 'login_required') return 'warning'
-  return 'info'
-}
-
-function getNotesHint(status: string) {
-  if (status === 'available') return '可查看实时便笺'
-  if (status === 'login_required') return '请先刷新或重新扫码登录'
-  return '该游戏当前未接入实时便笺'
-}
-
 function getAssetLabel(asset: string) {
   if (asset === 'checkin') return '签到'
-  if (asset === 'notes') return '便笺'
   if (asset === 'gacha') return '抽卡'
   if (asset === 'redeem') return '兑换码'
   return asset
@@ -375,15 +330,7 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString('zh-CN')
 }
 
-function jumpToNotes(accountId: number) {
-  router.push({
-    path: '/',
-    query: { account_id: String(accountId) },
-  })
-}
-
 function jumpToGacha(accountId: number, game: string) {
-  // 抽卡页当前仍按账号 + 游戏运作，角色卡只负责带入上下文，不伪造角色级查询语义。
   router.push({
     path: '/gacha',
     query: {
@@ -394,7 +341,6 @@ function jumpToGacha(accountId: number, game: string) {
 }
 
 function jumpToRedeem(accountId: number, game: string) {
-  // 兑换链路同样按账号 + 游戏维度执行，角色页只是帮助用户更快落到正确入口。
   router.push({
     path: '/redeem',
     query: {
@@ -414,7 +360,7 @@ onMounted(loadOverview)
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -431,12 +377,6 @@ onMounted(loadOverview)
   background:
     radial-gradient(circle at top right, rgba(125, 211, 252, 0.18), transparent 32%),
     linear-gradient(180deg, rgba(240, 249, 255, 0.98), rgba(224, 242, 254, 0.84));
-}
-
-.summary-card-accent {
-  background:
-    radial-gradient(circle at top right, rgba(192, 132, 252, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(250, 245, 255, 0.98), rgba(243, 232, 255, 0.84));
 }
 
 .summary-card-warm {
@@ -548,24 +488,6 @@ onMounted(loadOverview)
   box-shadow: 0 12px 26px rgba(15, 23, 42, 0.05);
 }
 
-.tone-available {
-  background:
-    radial-gradient(circle at top right, rgba(52, 211, 153, 0.14), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 253, 245, 0.92));
-}
-
-.tone-login_required {
-  background:
-    radial-gradient(circle at top right, rgba(251, 191, 36, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 247, 237, 0.92));
-}
-
-.tone-unsupported {
-  background:
-    radial-gradient(circle at top right, rgba(148, 163, 184, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 245, 249, 0.92));
-}
-
 .role-card-head {
   display: flex;
   align-items: flex-start;
@@ -626,7 +548,7 @@ onMounted(loadOverview)
 .status-grid {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 
@@ -713,10 +635,7 @@ onMounted(loadOverview)
     align-items: flex-start;
   }
 
-  .filter-search {
-    width: 100%;
-  }
-
+  .filter-search,
   .filter-select {
     width: 100%;
   }
@@ -727,8 +646,7 @@ onMounted(loadOverview)
     gap: 16px;
   }
 
-  .summary-grid,
-  .status-grid {
+  .summary-grid {
     grid-template-columns: 1fr;
   }
 
