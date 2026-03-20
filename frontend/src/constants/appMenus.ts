@@ -1,6 +1,5 @@
 export type AppMenuKey =
   | 'dashboard'
-  | 'notes'
   | 'accounts'
   | 'logs'
   | 'gacha'
@@ -20,9 +19,6 @@ export type AppMenuDefinition = {
 
 export const APP_MENUS: AppMenuDefinition[] = [
   { key: 'dashboard', label: '仪表盘', path: '/' },
-  // notes 需要进入统一菜单权限体系，保证后台可以按角色关闭实时便笺；
-  // 但它本质上是仪表盘内的功能开关而不是独立页面，误当成导航项会让侧边栏出现一个无法单独访问的伪菜单。
-  { key: 'notes', label: '实时便笺', path: '/#dashboard-notes', navigable: false },
   { key: 'accounts', label: '账号管理', path: '/accounts' },
   { key: 'logs', label: '签到日志', path: '/logs' },
   { key: 'gacha', label: '抽卡记录', path: '/gacha' },

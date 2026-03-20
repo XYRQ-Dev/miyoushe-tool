@@ -9,13 +9,11 @@
     @close="cleanup"
   >
     <div class="qr-container">
-      <!-- 加载中 -->
       <div v-if="status === 'initializing'" class="qr-loading">
         <el-icon class="loading-icon" :size="40"><Loading /></el-icon>
         <p>正在准备登录页面...</p>
       </div>
 
-      <!-- 二维码展示 -->
       <div v-else-if="status === 'qr_ready' || status === 'scanned'" class="qr-code">
         <img v-if="qrImage" :src="'data:image/png;base64,' + qrImage" alt="二维码" />
         <div v-if="status === 'scanned'" class="scanned-overlay">
@@ -24,21 +22,18 @@
         </div>
       </div>
 
-      <!-- 成功 -->
       <div v-else-if="status === 'success'" class="qr-success">
         <el-icon :size="48" color="#10b981"><CircleCheck /></el-icon>
         <p>登录成功！</p>
         <p class="sub-text">已导入 {{ rolesCount }} 个游戏角色</p>
       </div>
 
-      <!-- 失败/超时 -->
       <div v-else-if="status === 'failed' || status === 'timeout'" class="qr-error">
         <el-icon :size="48" color="#ef4444"><CircleClose /></el-icon>
         <p>{{ errorMessage || '登录失败' }}</p>
         <el-button type="primary" size="small" @click="startLogin">重试</el-button>
       </div>
 
-      <!-- 提示文字 -->
       <div v-if="status === 'qr_ready'" class="qr-hint">
         <p>打开米游社 App → 我的 → 左上角扫码</p>
         <p class="timeout-hint">二维码有效期 3 分钟</p>
@@ -83,11 +78,11 @@ function getDisplayErrorMessage(message: string) {
 function startLogin() {
   if (!props.sessionId) return
 
+  cleanup()
   status.value = 'initializing'
   qrImage.value = ''
   errorMessage.value = ''
 
-  // 连接 WebSocket
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const userId = userStore.userInfo?.id || 0
@@ -113,7 +108,6 @@ function startLogin() {
       case 'success':
         status.value = 'success'
         rolesCount.value = data.roles_count || 0
-        // 延迟关闭弹窗
         setTimeout(() => emit('success'), 1500)
         break
       case 'error':

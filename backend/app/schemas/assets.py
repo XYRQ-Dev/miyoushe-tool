@@ -8,7 +8,6 @@ from pydantic import BaseModel
 class RoleAssetOverviewSummaryResponse(BaseModel):
     total_accounts: int
     total_roles: int
-    note_supported_roles: int
     gacha_archived_games: int
 
 
@@ -29,7 +28,6 @@ class RoleAssetRoleResponse(BaseModel):
     level: int | None = None
     is_enabled: bool
     supported_assets: list[str]
-    notes_status: str
     has_gacha_archive: bool
     recent_checkin: RoleAssetCheckinSummaryResponse
 

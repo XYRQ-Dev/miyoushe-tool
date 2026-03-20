@@ -21,6 +21,9 @@ sys.modules.setdefault("playwright.async_api", playwright_async_api)
 
 crypto_module = types.ModuleType("app.utils.crypto")
 crypto_module.encrypt_cookie = lambda value: value
+crypto_module.decrypt_cookie = lambda value: value
+crypto_module.encrypt_text = lambda value: value
+crypto_module.decrypt_text = lambda value: value
 sys.modules.setdefault("app.utils.crypto", crypto_module)
 
 from app.services.qr_login import QrLoginSession
@@ -99,6 +102,40 @@ class QrLoginSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.status, "failed")
         self.assertIn("未找到二维码", session.error_message)
         session.capture_debug_snapshot.assert_awaited()
+
+    async def test_extract_cookie_diagnostics_only_reports_names_and_flags(self):
+        session = QrLoginSession("session-5", 1)
+        session.context = AsyncMock()
+        session.context.cookies = AsyncMock(return_value=[
+            {"domain": ".mihoyo.com", "name": "stoken_v2", "value": "v2_secret_token"},
+            {"domain": ".mihoyo.com", "name": "ltuid_v2", "value": "10001"},
+            {"domain": ".mihoyo.com", "name": "ltmid_v2", "value": "mid_secret"},
+            {"domain": ".mihoyo.com", "name": "cookie_token", "value": "cookie_secret"},
+            {"domain": ".mihoyo.com", "name": "login_ticket", "value": "ticket_secret"},
+            {"domain": ".example.com", "name": "ignore_me", "value": "ignore_secret"},
+        ])
+
+        diagnostics = await session.extract_cookie_diagnostics({
+            "stoken": "v2_secret_token",
+            "stuid": "10001",
+            "mid": "mid_secret",
+        })
+
+        self.assertEqual(
+            diagnostics["cookie_names"],
+            ["cookie_token", "login_ticket", "ltmid_v2", "ltuid_v2", "stoken_v2"],
+        )
+        self.assertTrue(diagnostics["has_stoken_cookie"])
+        self.assertTrue(diagnostics["has_stuid_cookie"])
+        self.assertTrue(diagnostics["has_mid_cookie"])
+        self.assertTrue(diagnostics["has_cookie_token"])
+        self.assertTrue(diagnostics["has_login_ticket"])
+        self.assertFalse(diagnostics["has_game_token"])
+        self.assertTrue(diagnostics["parsed_has_stoken"])
+        self.assertTrue(diagnostics["parsed_stoken_is_v2"])
+        self.assertNotIn("v2_secret_token", str(diagnostics))
+        self.assertNotIn("mid_secret", str(diagnostics))
+        self.assertNotIn("cookie_secret", str(diagnostics))
 
 
 if __name__ == "__main__":

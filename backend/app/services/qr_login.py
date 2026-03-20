@@ -22,6 +22,10 @@ MIYOUSHE_LOGIN_URL = (
     "https://user.mihoyo.com/passport/index.html"
     "?legacy_env=production#/login?is_from_legacy=1"
 )
+RELEVANT_COOKIE_DOMAINS = (".mihoyo.com", ".miyoushe.com", ".hoyoverse.com")
+STOKEN_COOKIE_KEYS = {"stoken", "stoken_v2"}
+STUID_COOKIE_KEYS = {"stuid", "ltuid", "ltuid_v2", "account_id", "account_id_v2", "login_uid"}
+MID_COOKIE_KEYS = {"mid", "ltmid_v2", "account_mid_v2"}
 
 
 class QrLoginSession:
@@ -37,10 +41,13 @@ class QrLoginSession:
         self.page: Optional[Page] = None
         self.status = "pending"  # pending / qr_ready / scanned / success / failed / timeout
         self.cookie_string: Optional[str] = None
+        self.captured_cookies: list[dict[str, Any]] = []
         self.error_message: Optional[str] = None
         self.last_qr_selector: Optional[str] = None
         self.last_qr_element_type: Optional[str] = None
         self.login_frame: Optional[Frame] = None
+        # 与当前 main.py 成功分支兼容；网页登录成功时如果暂时拉不到角色，仍可回填米游社 UID。
+        self.account_mihoyo_uid: Optional[str] = None
 
     async def start(self):
         """启动登录会话：创建浏览器上下文，导航到登录页"""
@@ -148,8 +155,8 @@ class QrLoginSession:
             return False
 
         selectors = [
-            '.qr-login-btn--wrapper',
-            '.qr-login-btn',
+            ".qr-login-btn--wrapper",
+            ".qr-login-btn",
             'text="扫码登录"',
             'text="二维码登录"',
         ]
@@ -301,17 +308,16 @@ class QrLoginSession:
         try:
             current_url = self.page.url
 
-            # 如果 URL 已经不是登录页面，说明登录成功
+            # 如果 URL 已经不是登录页面，说明登录成功。
+            # 继续停留在 login/user.mihoyo.com 域通常仍表示处于登录流程中。
             if "login" not in current_url.lower() and "user.mihoyo.com" not in current_url:
                 self.status = "success"
                 return self.status
 
-            # 检查页面内容是否有"已扫码"或"登录成功"的提示
             page_content = await self.page.content()
             if "已扫码" in page_content or "扫码成功" in page_content:
                 self.status = "scanned"
 
-            # 检查是否有用户信息出现（登录成功的标志）
             try:
                 user_info = await self.page.wait_for_selector(
                     '[class*="user-info"], [class*="avatar"], [class*="nickname"]',
@@ -337,18 +343,7 @@ class QrLoginSession:
             return None
 
         try:
-            cookies = await self.context.cookies()
-            # 筛选米游社相关域名的 Cookie
-            relevant_domains = [".mihoyo.com", ".miyoushe.com", ".hoyoverse.com"]
-            filtered = [
-                c for c in cookies
-                if any(d in c.get("domain", "") for d in relevant_domains)
-            ]
-
-            if not filtered:
-                # 如果筛选后为空，使用全部 Cookie
-                filtered = cookies
-
+            filtered = await self._load_relevant_cookies()
             cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in filtered)
             self.cookie_string = cookie_str
             return cookie_str
@@ -356,6 +351,57 @@ class QrLoginSession:
         except Exception as e:
             logger.error(f"[{self.session_id}] 提取 Cookie 失败: {e}")
             return None
+
+    async def extract_cookie_diagnostics(self, token_info: dict[str, str | None]) -> dict[str, Any]:
+        """
+        输出安全的 Cookie 诊断摘要。
+
+        这里只记录键名与字段是否存在，绝不记录 Cookie 原值、stoken 原值或其他敏感信息，
+        目的是回答“网页登录链路到底拿到了哪些字段”，而不是把高敏凭据写进日志。
+        """
+        cookies = self.captured_cookies or await self._load_relevant_cookies()
+        cookie_names = sorted(
+            {
+                str(cookie.get("name") or "").strip()
+                for cookie in cookies
+                if str(cookie.get("name") or "").strip()
+            }
+        )
+        stoken = token_info.get("stoken")
+        return {
+            "cookie_count": len(cookies),
+            "cookie_names": cookie_names,
+            "has_stoken_cookie": any(name in STOKEN_COOKIE_KEYS for name in cookie_names),
+            "has_stuid_cookie": any(name in STUID_COOKIE_KEYS for name in cookie_names),
+            "has_mid_cookie": any(name in MID_COOKIE_KEYS for name in cookie_names),
+            "has_cookie_token": "cookie_token" in cookie_names,
+            "has_login_ticket": "login_ticket" in cookie_names,
+            "has_login_uid": "login_uid" in cookie_names,
+            "has_game_token": "game_token" in cookie_names,
+            "parsed_has_stoken": bool(stoken),
+            "parsed_has_stuid": bool(token_info.get("stuid")),
+            "parsed_has_mid": bool(token_info.get("mid")),
+            "parsed_stoken_is_v2": bool(stoken and stoken.startswith("v2_")),
+        }
+
+    @staticmethod
+    def _filter_relevant_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        filtered = [
+            cookie
+            for cookie in cookies
+            if any(domain in str(cookie.get("domain", "")) for domain in RELEVANT_COOKIE_DOMAINS)
+        ]
+        return filtered or cookies
+
+    async def _load_relevant_cookies(self) -> list[dict[str, Any]]:
+        if not self.context:
+            return []
+        cookies = await self.context.cookies()
+        filtered = self._filter_relevant_cookies(cookies)
+        # 这里缓存“本次成功登录时真正参与拼接 cookie_str 的那批 Cookie”，
+        # 让后续诊断日志与正式落库使用的是同一份输入，避免再次读取浏览器状态导致结论漂移。
+        self.captured_cookies = filtered
+        return filtered
 
     async def close(self):
         """关闭会话，释放浏览器资源"""
@@ -392,14 +438,12 @@ class QrLoginManager:
 
     async def cleanup_expired(self, max_age_seconds: int = 180):
         """清理超时会话（默认 3 分钟）"""
-        # 简单实现：清理所有非成功状态的会话
         expired = [
-            sid for sid, s in self._sessions.items()
-            if s.status not in ("success",)
+            sid for sid, session in self._sessions.items()
+            if session.status not in ("success",)
         ]
         for sid in expired:
             await self.remove_session(sid)
 
 
-# 全局单例
 qr_login_manager = QrLoginManager()

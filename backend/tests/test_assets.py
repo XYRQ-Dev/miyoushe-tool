@@ -11,7 +11,7 @@ from app.models.account import GameRole, MihoyoAccount
 from app.models.gacha import GachaRecord
 from app.models.task_log import TaskLog
 from app.models.user import User
-from app.utils.crypto import encrypt_cookie
+from app.utils.crypto import encrypt_cookie, encrypt_text
 
 
 class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
@@ -44,7 +44,6 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.summary.total_accounts, 0)
         self.assertEqual(response.summary.total_roles, 0)
-        self.assertEqual(response.summary.note_supported_roles, 0)
         self.assertEqual(response.summary.gacha_archived_games, 0)
         self.assertEqual(response.accounts, [])
 
@@ -63,6 +62,9 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
                 mihoyo_uid="10001",
                 cookie_status="valid",
                 cookie_encrypted=encrypt_cookie("ltuid=10001; cookie_token=test-token"),
+                stoken_encrypted=encrypt_text("v2_test_stoken"),
+                stuid="10001",
+                mid="mid-10001",
             )
             reauth_account = MihoyoAccount(
                 user_id=user.id,
@@ -181,7 +183,6 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.summary.total_accounts, 2)
         self.assertEqual(response.summary.total_roles, 4)
-        self.assertEqual(response.summary.note_supported_roles, 3)
         self.assertEqual(response.summary.gacha_archived_games, 1)
 
         account_map = {account.account_id: account for account in response.accounts}
@@ -190,8 +191,7 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
         stable_role_map = {role.role_id: role for role in account_map[stable_account.id].roles}
         self.assertEqual(stable_role_map[stable_genshin.id].game, "genshin")
         self.assertEqual(stable_role_map[stable_genshin.id].game_name, "原神")
-        self.assertEqual(stable_role_map[stable_genshin.id].supported_assets, ["checkin", "notes", "gacha", "redeem"])
-        self.assertEqual(stable_role_map[stable_genshin.id].notes_status, "available")
+        self.assertEqual(stable_role_map[stable_genshin.id].supported_assets, ["checkin", "gacha", "redeem"])
         self.assertTrue(stable_role_map[stable_genshin.id].has_gacha_archive)
         self.assertEqual(stable_role_map[stable_genshin.id].recent_checkin.last_status, "success")
 
@@ -200,12 +200,12 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(stable_role_map[stable_starrail.id].recent_checkin.last_status)
 
         reauth_role_map = {role.role_id: role for role in account_map[reauth_account.id].roles}
-        self.assertEqual(reauth_role_map[reauth_starrail.id].notes_status, "login_required")
+        self.assertEqual(reauth_role_map[reauth_starrail.id].supported_assets, ["checkin", "gacha", "redeem"])
         self.assertEqual(reauth_role_map[reauth_starrail.id].recent_checkin.last_status, "failed")
         self.assertEqual(reauth_role_map[unsupported_role.id].game, "nap_cn")
         self.assertEqual(reauth_role_map[unsupported_role.id].game_name, "绝区零")
+        # 绝区零当前仅保留签到能力；这里必须锁定响应协议，避免前端误展示不存在的兑换入口。
         self.assertEqual(reauth_role_map[unsupported_role.id].supported_assets, ["checkin"])
-        self.assertEqual(reauth_role_map[unsupported_role.id].notes_status, "unsupported")
 
     async def test_get_role_asset_overview_keeps_recent_checkin_after_role_sync_preserves_identity(self):
         from app.api.assets import get_role_asset_overview
@@ -276,3 +276,7 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refreshed_role.role_id, role.id)
         self.assertEqual(refreshed_role.recent_checkin.last_status, "success")
         self.assertEqual(refreshed_role.recent_checkin.last_message, "刷新前已签到")
+
+
+
+

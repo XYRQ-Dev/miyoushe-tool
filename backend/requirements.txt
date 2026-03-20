@@ -17,4 +17,5 @@ aiofiles==24.1.0
 bcrypt==4.2.0
 asyncmy==0.2.10
 aiosqlite==0.20.0
-genshin==1.7.23
+qrcode[pil]==7.4.2
+

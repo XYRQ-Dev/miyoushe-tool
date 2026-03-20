@@ -107,7 +107,6 @@ const isMobileViewport = ref(false)
 
 const menuIconMap: Record<AppMenuKey, unknown> = {
   dashboard: Odometer,
-  notes: Odometer,
   accounts: User,
   logs: Document,
   gacha: Collection,

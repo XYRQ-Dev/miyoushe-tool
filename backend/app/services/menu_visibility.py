@@ -24,11 +24,6 @@ class AppMenuDefinition:
     editable: bool = True
     navigable: bool = True
 
-
-NOTES_MODULE_PATH = "[module] dashboard-notes"
-# `notes.path` 是菜单可见性接口里的契约级占位值，不是前端路由，也不是 UI 展示文案。
-# notes 实际上是仪表盘内部模块；如果这里误改成 `/notes` 这类伪路由，调用方会把它误判成独立页面，
-# 导致菜单管理、前端信息架构和后续兼容逻辑继续围绕一个不存在的真实页面演进。
 APP_MENU_DEFINITIONS: tuple[AppMenuDefinition, ...] = (
     AppMenuDefinition("dashboard", "仪表盘", "/", True, True),
     AppMenuDefinition("accounts", "账号管理", "/accounts", True, True),
@@ -37,12 +32,6 @@ APP_MENU_DEFINITIONS: tuple[AppMenuDefinition, ...] = (
     AppMenuDefinition("assets", "角色资产", "/assets", True, True),
     AppMenuDefinition("health", "账号健康中心", "/health", True, True),
     AppMenuDefinition("redeem", "兑换码中心", "/redeem", True, True),
-    # 实时便笺属于“独立功能开关”而不是传统导航菜单：
-    # 1. 前端需要在菜单管理页里展示并单独控制它
-    # 2. 侧边导航却不一定要把它渲染成固定入口
-    # 因此这里显式标记 `navigable=False`。若误删该字段或改回可导航项，
-    # 前端可能会把本应仅作能力开关的配置误当成菜单入口渲染，造成信息架构漂移。
-    AppMenuDefinition("notes", "实时便笺（仪表盘模块）", NOTES_MODULE_PATH, True, True, navigable=False),
     AppMenuDefinition("settings", "系统设置", "/settings", True, True),
     AppMenuDefinition("admin_users", "用户信息列表", "/admin/users", False, True),
     AppMenuDefinition("admin_menu_management", "菜单与功能开关", "/admin/menus", False, True, editable=False),
