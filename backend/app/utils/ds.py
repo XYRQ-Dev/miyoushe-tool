@@ -16,6 +16,8 @@ import time
 
 from app.config import settings
 
+GENSHIN_AUTHKEY_LK2_SALT = "sidQFEglajEz7FA0Aj7HQPV88zpf17SO"
+
 
 def generate_ds(body: str = "", query: str = "") -> str:
     """
@@ -56,6 +58,29 @@ def generate_cn_dynamic_secret(salt: str) -> str:
     text = f"salt={salt}&t={t}&r={r}"
     md5 = hashlib.md5(text.encode("utf-8")).hexdigest()
     return f"{t},{r},{md5}"
+
+
+def generate_cn_gen1_ds(*, salt: str, include_chars: bool = True) -> str:
+    """
+    生成仅包含 `salt/t/r` 的国服 Gen1 DS。
+
+    原神 authkey 的 LK2 链路已经切到“POST JSON + SToken Cookie + DS(Gen1)”语义，
+    服务端校验重点是 `salt/t/r`。如果维护时回退成旧 GET+工作 Cookie 心智并继续拼 `b/q`，
+    最终会得到“签名字段看起来完整，但接口稳定拒绝”的隐蔽故障。
+    """
+    t = int(time.time())
+    if include_chars:
+        r = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    else:
+        r = f"{random.randint(0, 999999):06d}"
+    text = f"salt={salt}&t={t}&r={r}"
+    md5 = hashlib.md5(text.encode("utf-8")).hexdigest()
+    return f"{t},{r},{md5}"
+
+
+def generate_cn_gen1_ds_lk2() -> str:
+    """生成原神 authkey LK2 专用 DS。"""
+    return generate_cn_gen1_ds(salt=GENSHIN_AUTHKEY_LK2_SALT, include_chars=True)
 
 
 def generate_ds_v2(body: str = "", query: str = "") -> str:

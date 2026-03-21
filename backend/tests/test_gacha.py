@@ -44,6 +44,8 @@ from app.schemas.gacha import (
     GachaRoleOption,
     GachaSummaryResponse,
 )
+from app.services.genshin_authkey import GENSHIN_AUTHKEY_API_URL
+from app.utils.crypto import encrypt_cookie, encrypt_text
 from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
@@ -74,7 +76,29 @@ class FakeAsyncClient:
 
     async def get(self, url, params=None, headers=None):
         index = len(self.calls)
-        self.calls.append({"url": url, "params": params, "headers": headers})
+        self.calls.append(
+            {
+                "method": "GET",
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "json": None,
+            }
+        )
+        payload = self._payloads[min(index, len(self._payloads) - 1)]
+        return FakeResponse(payload)
+
+    async def post(self, url, params=None, headers=None, json=None):
+        index = len(self.calls)
+        self.calls.append(
+            {
+                "method": "POST",
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "json": json,
+            }
+        )
         payload = self._payloads[min(index, len(self._payloads) - 1)]
         return FakeResponse(payload)
 
@@ -131,6 +155,19 @@ class FakeLockEngine:
     def __init__(self, connection):
         self._connection = connection
         self.connect = AsyncMock(return_value=connection)
+
+
+class DummyGachaDb:
+    def __init__(self):
+        self.added = []
+        self.commit = AsyncMock()
+        self.refresh = AsyncMock(side_effect=self._refresh)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def _refresh(self, obj):
+        obj.id = 9001
 
 
 class GachaContractTests(unittest.TestCase):
@@ -305,6 +342,95 @@ class MySqlIsolatedAsyncioTestCaseContractTests(unittest.IsolatedAsyncioTestCase
         self.assertIsNone(case._lock_connection)
 
 
+class GachaRateLimitTests(unittest.IsolatedAsyncioTestCase):
+    def _build_genshin_import_url(self) -> str:
+        return GachaContractTests()._build_genshin_import_url(game_uid="10001")
+
+    async def test_import_records_retries_rate_limit_then_succeeds(self):
+        from app.services.gacha import GachaService
+
+        db = DummyGachaDb()
+        service = GachaService(db)
+        service._save_page_records = AsyncMock(return_value=(20, 0))
+        account = type("Account", (), {"id": 1})()
+        page_items = [
+            {
+                "id": "1770132000002009065",
+                "name": "刻晴",
+                "item_type": "角色",
+                "rank_type": "5",
+                "gacha_type": "301",
+                "time": "2026-03-18 12:00:00",
+            }
+        ] * 20
+        fake_client = FakeAsyncClient(
+            [
+                {"retcode": 0, "message": "OK", "data": {"list": page_items}},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": 0, "message": "OK", "data": {"list": []}},
+            ]
+        )
+        sleep_mock = AsyncMock()
+
+        with (
+            patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+            patch("app.services.gacha.asyncio.sleep", sleep_mock),
+            patch("app.services.gacha.random.randint", side_effect=[1200, 2500]),
+        ):
+            response = await service.import_records(
+                account=account,
+                game="genshin",
+                game_uid="10001",
+                import_url=self._build_genshin_import_url(),
+            )
+
+        self.assertEqual(response.inserted_count, 20)
+        self.assertEqual(len(fake_client.calls), 3)
+        self.assertEqual(fake_client.calls[1]["params"]["page"], "2")
+        self.assertEqual(fake_client.calls[2]["params"]["page"], "2")
+        self.assertEqual(sleep_mock.await_count, 2)
+        self.assertEqual(sleep_mock.await_args_list[0].args[0], 1.2)
+        self.assertEqual(sleep_mock.await_args_list[1].args[0], 2.5)
+        db.commit.assert_awaited_once()
+
+    async def test_import_records_fails_after_rate_limit_retries_exhausted_without_commit(self):
+        from app.services.gacha import GachaService
+
+        db = DummyGachaDb()
+        service = GachaService(db)
+        service._save_page_records = AsyncMock()
+        account = type("Account", (), {"id": 1})()
+        fake_client = FakeAsyncClient(
+            [
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+            ]
+        )
+        sleep_mock = AsyncMock()
+
+        with (
+            patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+            patch("app.services.gacha.asyncio.sleep", sleep_mock),
+            patch("app.services.gacha.random.randint", side_effect=[2200, 4500, 7500]),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                await service.import_records(
+                    account=account,
+                    game="genshin",
+                    game_uid="10001",
+                    import_url=self._build_genshin_import_url(),
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "抽卡记录导入失败：访问过于频繁，请稍后重试")
+        self.assertEqual(len(fake_client.calls), 4)
+        self.assertEqual(sleep_mock.await_count, 3)
+        db.commit.assert_not_awaited()
+        service._save_page_records.assert_not_called()
+
+
 class GachaTests(MySqlIsolatedAsyncioTestCase):
     # 抽卡模型这轮刚切到 `game_uid` 三维唯一键。
     # 这里要求测试基座直接走 drop/create，一次性把旧 schema 残留清空；
@@ -348,6 +474,20 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
 
             await session.commit()
             return user, account, roles
+
+    async def _seed_high_privilege_account_with_roles(self, role_specs=None):
+        # 新的 authkey 主链会先校验可解密的根凭据，再决定是否向上游发起 POST。
+        # 成功路径测试若仍沿用“裸账号”夹具，断言会提前死在凭据校验上，无法真正锁住协议是否对齐 HuTao 主链。
+        user, account, roles = await self._seed_account_with_roles(role_specs)
+        async with await self._new_session() as session:
+            managed = await session.get(MihoyoAccount, account.id)
+            managed.stoken_encrypted = encrypt_text("v2_test_stoken")
+            managed.stuid = "10001"
+            managed.mid = "mid-10001"
+            managed.credential_status = "valid"
+            await session.commit()
+            await session.refresh(managed)
+        return user, managed, roles
 
     def _build_genshin_import_url(self, *, game_uid: str | None = None) -> str:
         return GachaContractTests()._build_genshin_import_url(game_uid=game_uid)
@@ -549,14 +689,14 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertEqual(context.exception.detail, "该账号未开通所选角色的抽卡记录能力")
 
-    async def test_import_from_account_uses_requested_game_uid_role(self):
-        user, account, _roles = await self._seed_account_with_roles(
+    async def test_import_from_account_posts_json_using_root_stoken_contract(self):
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
             [
                 {"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服", "region": "cn_gf01"},
                 {"game_biz": "hk4e_os", "game_uid": "10002", "nickname": "国际服", "region": "os_usa"},
             ]
         )
-        fake_client = FakeAsyncClient(
+        authkey_client = FakeAsyncClient(
             [
                 {
                     "retcode": 0,
@@ -566,7 +706,11 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                         "authkey_ver": 1,
                         "sign_type": 2,
                     },
-                },
+                }
+            ]
+        )
+        gacha_client = FakeAsyncClient(
+            [
                 {
                     "retcode": 0,
                     "message": "OK",
@@ -582,31 +726,200 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                             }
                         ]
                     },
-                },
+                }
             ]
         )
 
         async with await self._new_session() as session:
             with (
-                patch(
-                    "app.services.gacha.AccountCredentialService.ensure_work_cookie",
-                    new=AsyncMock(return_value={"state": "valid", "message": "ok", "cookie": "ltoken_v2=test"}),
-                ),
-                patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+                patch("app.services.genshin_authkey.generate_device_id", return_value="device-id-001"),
+                patch("app.services.genshin_authkey.generate_cn_gen1_ds_lk2", return_value="123456,abcdef,sign"),
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=authkey_client),
+                patch("app.services.gacha.httpx.AsyncClient", return_value=gacha_client),
             ):
                 response = await import_gacha_records_from_account(
                     GachaImportFromAccountRequest(
                         account_id=account.id,
                         game="genshin",
-                        game_uid="10002",
+                        game_uid="10001",
                     ),
                     current_user=user,
                     db=session,
                 )
 
         self.assertEqual(response.inserted_count, 1)
-        self.assertEqual(fake_client.calls[0]["params"]["game_uid"], "10002")
-        self.assertEqual(fake_client.calls[0]["params"]["game_biz"], "hk4e_os")
+        self.assertEqual(authkey_client.calls[0]["method"], "POST")
+        self.assertEqual(authkey_client.calls[0]["url"], GENSHIN_AUTHKEY_API_URL)
+        self.assertEqual(
+            authkey_client.calls[0]["json"],
+            {
+                "auth_appid": "webview_gacha",
+                "game_biz": "hk4e_cn",
+                "game_uid": 10001,
+                "region": "cn_gf01",
+            },
+        )
+        self.assertEqual(authkey_client.calls[0]["headers"]["Cookie"], "mid=mid-10001; stoken=v2_test_stoken; stuid=10001")
+        self.assertEqual(authkey_client.calls[0]["headers"]["Referer"], "https://app.mihoyo.com")
+        self.assertEqual(authkey_client.calls[0]["headers"]["x-rpc-app_version"], "2.95.1")
+        self.assertEqual(authkey_client.calls[0]["headers"]["x-rpc-device_id"], "device-id-001")
+        self.assertEqual(authkey_client.calls[0]["headers"]["DS"], "123456,abcdef,sign")
+        self.assertNotIn("x-rpc-device_fp", authkey_client.calls[0]["headers"])
+        self.assertEqual(gacha_client.calls[0]["method"], "GET")
+        self.assertEqual(gacha_client.calls[0]["params"]["authkey"], "generated-authkey")
+
+    async def test_import_from_account_falls_back_region_only_for_hk4e_cn_role(self):
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
+            [{"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服缺区服", "region": None}]
+        )
+        authkey_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {
+                        "authkey": "generated-authkey",
+                        "authkey_ver": 1,
+                        "sign_type": 2,
+                    },
+                }
+            ]
+        )
+        gacha_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {"list": []},
+                }
+            ]
+        )
+
+        async with await self._new_session() as session:
+            with (
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=authkey_client),
+                patch("app.services.gacha.httpx.AsyncClient", return_value=gacha_client),
+            ):
+                response = await import_gacha_records_from_account(
+                    GachaImportFromAccountRequest(
+                        account_id=account.id,
+                        game="genshin",
+                        game_uid="10001",
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+        self.assertEqual(response.inserted_count, 0)
+        self.assertEqual(
+            authkey_client.calls[0]["json"],
+            {
+                "auth_appid": "webview_gacha",
+                "game_biz": "hk4e_cn",
+                "game_uid": 10001,
+                "region": "cn_gf01",
+            },
+        )
+
+    async def test_import_from_account_requires_high_privilege_root_credentials(self):
+        # 这里故意只给一个“看起来还能用”的工作 Cookie，却不给可解密的高权限根凭据。
+        # 若后续实现回退成“工作 Cookie 能用就继续试”，这个用例会把协议降级直接打红。
+        user, account, _roles = await self._seed_account_with_roles(
+            [{"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服", "region": "cn_gf01"}]
+        )
+        async with await self._new_session() as session:
+            managed = await session.get(MihoyoAccount, account.id)
+            managed.cookie_encrypted = encrypt_cookie("ltuid=10001; cookie_token=legacy-cookie-token")
+            managed.cookie_status = "valid"
+            await session.commit()
+
+        async with await self._new_session() as session:
+            with self.assertRaises(HTTPException) as context:
+                await import_gacha_records_from_account(
+                    GachaImportFromAccountRequest(
+                        account_id=account.id,
+                        game="genshin",
+                        game_uid="10001",
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "高权限根凭据已失效，请重新扫码升级高权限登录")
+
+    async def test_import_from_account_rejects_oversea_role_for_genshin_authkey(self):
+        # HuTao 主链对国际服 `SToken -> authkey` 直接判不支持。
+        # 这里必须在本地前置拒绝，不能继续“先打上游再看返回值”，否则错误语义会重新变模糊。
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
+            [{"game_biz": "hk4e_os", "game_uid": "10002", "nickname": "国际服", "region": "os_usa"}]
+        )
+        fake_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {
+                        "authkey": "should-not-be-used",
+                        "authkey_ver": 1,
+                        "sign_type": 2,
+                    },
+                }
+            ]
+        )
+
+        async with await self._new_session() as session:
+            with (
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=fake_client),
+            ):
+                with self.assertRaises(HTTPException) as context:
+                    await import_gacha_records_from_account(
+                        GachaImportFromAccountRequest(
+                            account_id=account.id,
+                            game="genshin",
+                            game_uid="10002",
+                        ),
+                        current_user=user,
+                        db=session,
+                    )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "当前仅支持原神国服账号自动导入")
+        self.assertEqual(fake_client.calls, [])
+
+    async def test_import_from_account_maps_upstream_login_expired_to_reauth_message(self):
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
+            [{"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服", "region": "cn_gf01"}]
+        )
+        authkey_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": -100,
+                    "message": "登录状态失效，请重新登录",
+                    "data": None,
+                }
+            ]
+        )
+
+        async with await self._new_session() as session:
+            with (
+                patch("app.services.genshin_authkey.generate_device_id", return_value="device-id-001"),
+                patch("app.services.genshin_authkey.generate_cn_gen1_ds_lk2", return_value="123456,abcdef,sign"),
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=authkey_client),
+            ):
+                with self.assertRaises(HTTPException) as context:
+                    await import_gacha_records_from_account(
+                        GachaImportFromAccountRequest(
+                            account_id=account.id,
+                            game="genshin",
+                            game_uid="10001",
+                        ),
+                        current_user=user,
+                        db=session,
+                    )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "原神 authkey 生成失败：米游社登录状态已失效，请重新扫码登录")
 
     async def test_import_uigf_only_imports_requested_uid_and_rejects_missing_uid(self):
         user, account, _roles = await self._seed_account_with_roles(

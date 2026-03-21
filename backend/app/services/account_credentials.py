@@ -13,6 +13,7 @@
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -39,6 +40,21 @@ class RootCredentialNetworkError(RuntimeError):
     """与官方接口通信失败时抛出的网络异常。"""
 
 
+@dataclass(frozen=True)
+class RootCredentialSnapshot:
+    """
+    根凭据快照。
+
+    这里强制把根凭据读成不可变快照，是为了防止调用方拿到“半残字段”后继续拼接请求。
+    一旦允许 `stuid / stoken` 任何一个缺失仍继续执行，后续最容易被误改回“沿用旧 GET+工作 Cookie”
+    的路径，最终让定位失败点变得非常困难。
+    """
+
+    stuid: str
+    mid: str | None
+    stoken: str
+
+
 class AccountCredentialService:
     """
     管理账号根凭据与派生工作 Cookie。
@@ -52,22 +68,97 @@ class AccountCredentialService:
         self.db = db
         self.timeout = timeout
 
-    def _build_stoken_cookie(self, account: MihoyoAccount, stoken: str) -> str:
+    def get_root_credential_snapshot(self, account: MihoyoAccount) -> RootCredentialSnapshot:
+        """
+        读取根凭据快照。
+
+        helper 必须在这里一次性兜底校验 `stuid + stoken`，而不是返回“先凑合用”的半残对象。
+        否则下游会把失败归因为网络波动，继续尝试旧 GET+工作 Cookie 思路，破坏后续的统一排障口径。
+        """
+        stuid = str(account.stuid or "").strip()
+        if not stuid:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（缺少 stuid）")
+
+        if not account.stoken_encrypted:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（缺少 stoken）")
+
+        try:
+            stoken = decrypt_text(account.stoken_encrypted).strip()
+        except Exception as exc:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（stoken 无法解密）") from exc
+
+        if not stoken:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（stoken 为空）")
+
+        mid = str(account.mid).strip() if account.mid else None
+        return RootCredentialSnapshot(stuid=stuid, mid=mid or None, stoken=stoken)
+
+    def build_stoken_cookie_for_root_api(self, account: MihoyoAccount) -> str:
+        """
+        构造根凭据接口专用 Cookie。
+
+        这里显式包含 `stoken + stoken_v2`，目的是对齐新链路的 root API 口径，避免后续维护者
+        误把“只带工作 Cookie 的旧 GET 习惯”当成可回退方案。
+        """
+        snapshot = self.get_root_credential_snapshot(account)
+        return self._build_stoken_cookie(
+            account,
+            snapshot.stoken,
+            stuid=snapshot.stuid,
+            mid=snapshot.mid,
+        )
+
+    def build_stoken_cookie_for_authkey(self, account: MihoyoAccount) -> str:
+        """
+        构造原神 authkey 专用 Cookie。
+
+        `genAuthKey` 对 Cookie 形状比 Passport 根凭据接口更敏感。
+        HuTao 当前 `CookieType.SToken` 实际要求 `mid + stoken + stuid` 这组三件套；
+        如果这里偷懒只带 `stuid + stoken`，表面上已经不像旧工作 Cookie，那仍然会落在
+        “方法、DS、Referer 都对了，但上游继续 invalid request” 的尴尬半对齐状态。
+        """
+        snapshot = self.get_root_credential_snapshot(account)
+        if not snapshot.mid:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（缺少 mid）")
+        return "; ".join(
+            [
+                f"mid={snapshot.mid}",
+                f"stoken={snapshot.stoken}",
+                f"stuid={snapshot.stuid}",
+            ]
+        )
+
+    def _build_stoken_cookie(
+        self,
+        account: MihoyoAccount,
+        stoken: str,
+        *,
+        stuid: str | None = None,
+        mid: str | None = None,
+    ) -> str:
+        effective_stuid = str(stuid or account.stuid or "").strip()
+        if not effective_stuid:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（缺少 stuid）")
+        normalized_stoken = stoken.strip()
+        if not normalized_stoken:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（缺少 stoken）")
         cookie_parts = [
-            f"stuid={account.stuid}",
-            f"ltuid={account.stuid}",
-            f"ltuid_v2={account.stuid}",
-            f"account_id={account.stuid}",
-            f"account_id_v2={account.stuid}",
-            f"login_uid={account.stuid}",
-            f"stoken_v2={stoken}",
+            f"stuid={effective_stuid}",
+            f"ltuid={effective_stuid}",
+            f"ltuid_v2={effective_stuid}",
+            f"account_id={effective_stuid}",
+            f"account_id_v2={effective_stuid}",
+            f"login_uid={effective_stuid}",
+            f"stoken={normalized_stoken}",
+            f"stoken_v2={normalized_stoken}",
         ]
-        if account.mid:
+        effective_mid = str(mid).strip() if mid else str(account.mid).strip() if account.mid else ""
+        if effective_mid:
             cookie_parts.extend(
                 [
-                    f"mid={account.mid}",
-                    f"ltmid_v2={account.mid}",
-                    f"account_mid_v2={account.mid}",
+                    f"mid={effective_mid}",
+                    f"ltmid_v2={effective_mid}",
+                    f"account_mid_v2={effective_mid}",
                 ]
             )
         return "; ".join(cookie_parts)
@@ -191,15 +282,10 @@ class AccountCredentialService:
         now = utc_now_naive()
         account.last_token_refresh_at = now
 
-        if not account.stoken_encrypted or not account.stuid:
-            return self._mark_root_credentials_invalid(account, "缺少高权限根凭据")
-
         try:
-            stoken = decrypt_text(account.stoken_encrypted)
-        except Exception:
-            return self._mark_root_credentials_invalid(account, "高权限根凭据无法解密")
-
-        stoken_cookie = self._build_stoken_cookie(account, stoken)
+            stoken_cookie = self.build_stoken_cookie_for_root_api(account)
+        except RootCredentialRefreshError as exc:
+            return self._mark_root_credentials_invalid(account, str(exc))
         try:
             ltoken_payload = await self._get_json(
                 GET_LTOKEN_BY_STOKEN_URL,

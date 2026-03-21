@@ -2,6 +2,9 @@
 抽卡记录导入与查询服务
 """
 
+import asyncio
+import logging
+import random
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -25,11 +28,11 @@ from app.schemas.gacha import (
     GachaRoleOption,
     GachaSummaryResponse,
 )
-from app.services.account_credentials import AccountCredentialService
+from app.services.genshin_authkey import GenshinAuthkeyService
 from app.services.gacha_uigf import export_uigf_v42, parse_uigf
-from app.utils.crypto import decrypt_cookie
 from app.utils.timezone import utc_now_naive
 
+logger = logging.getLogger(__name__)
 
 SUPPORTED_GACHA_GAME_CONFIGS = {
     "genshin": {
@@ -56,14 +59,12 @@ SUPPORTED_GACHA_GAME_CONFIGS = {
         "supported_role_prefixes": ("hkrpg_",),
     },
 }
-
-GENSHIN_AUTHKEY_API_URL = "https://api-takumi.mihoyo.com/binding/api/genAuthKey"
-GENSHIN_GACHA_LOG_API_URL = "https://public-operation-hk4e.mihoyo.com/gacha_info/api/getGachaLog"
-GENSHIN_REGION_BY_GAME_BIZ = {
-    "hk4e_cn": "cn_gf01",
-    "hk4e_os": "os_usa",
-}
-
+GACHA_PAGE_DELAY_RANGE_MS = (1000, 2000)
+GACHA_RATE_LIMIT_RETRY_DELAY_RANGES_MS = (
+    (2000, 3000),
+    (4000, 6000),
+    (7000, 9000),
+)
 
 @dataclass
 class ParsedImportSource:
@@ -93,6 +94,84 @@ class GachaService:
         # 这些情况若直接冒泡成 500，用户和维护者都会被误导成“服务端代码炸了”，实际排障方向会完全跑偏。
         # 这里统一收口成 400 业务错误，是为了明确表达：请求已被成功处理，但导入源本身不可用或不合法。
         raise HTTPException(status_code=400, detail=f"抽卡记录导入失败：{message}")
+
+    @staticmethod
+    def _is_gacha_rate_limited(message: str) -> bool:
+        normalized = (message or "").strip().lower()
+        return "visit too frequently" in normalized
+
+    def _normalize_gacha_upstream_error_message(self, message: str) -> str:
+        if self._is_gacha_rate_limited(message):
+            return "访问过于频繁，请稍后重试"
+        return (message or "").strip() or "上游返回失败"
+
+    @staticmethod
+    def _pick_delay_ms(delay_range_ms: tuple[int, int]) -> int:
+        return random.randint(delay_range_ms[0], delay_range_ms[1])
+
+    async def _sleep_page_interval(self) -> None:
+        """
+        在分页请求之间插入 HuTao 风格随机等待。
+
+        `getGachaLog` 连续翻页过快时，上游会直接返回 `visit too frequently`。
+        这里必须在“上一页成功、下一页尚未发出”之间等待，而不是失败后才临时补救，
+        否则真实链路会继续表现成“偶尔能导入几页，随后稳定被限流”。
+        """
+        await asyncio.sleep(self._pick_delay_ms(GACHA_PAGE_DELAY_RANGE_MS) / 1000)
+
+    async def _sleep_rate_limit_backoff(self, *, page: int, retry_index: int) -> None:
+        delay_range_ms = GACHA_RATE_LIMIT_RETRY_DELAY_RANGES_MS[retry_index]
+        delay_ms = self._pick_delay_ms(delay_range_ms)
+        logger.warning(
+            "抽卡分页请求触发频率限制，准备退避重试: page=%s retry=%s delay_ms=%s",
+            page,
+            retry_index + 1,
+            delay_ms,
+        )
+        await asyncio.sleep(delay_ms / 1000)
+
+    async def _fetch_gacha_page_payload(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        parsed: ParsedImportSource,
+        page: int,
+        end_id: str,
+    ) -> dict[str, Any]:
+        params = dict(parsed.base_params)
+        params["page"] = str(page)
+        params["size"] = "20"
+        params["end_id"] = end_id
+
+        max_attempts = len(GACHA_RATE_LIMIT_RETRY_DELAY_RANGES_MS) + 1
+        for attempt in range(max_attempts):
+            try:
+                response = await client.get(parsed.base_url, params=params)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                self._raise_upstream_import_error(f"上游接口返回异常状态 {exc.response.status_code}")
+            except httpx.HTTPError:
+                self._raise_upstream_import_error("无法连接上游接口")
+
+            try:
+                payload = response.json()
+            except Exception:
+                self._raise_upstream_import_error("上游返回了无法解析的响应")
+
+            if not isinstance(payload, dict):
+                self._raise_upstream_import_error("上游返回了不符合预期的响应结构")
+
+            if payload.get("retcode") == 0:
+                return payload
+
+            message = str(payload.get("message") or payload.get("msg") or "上游返回失败").strip()
+            if self._is_gacha_rate_limited(message) and attempt < max_attempts - 1:
+                await self._sleep_rate_limit_backoff(page=page, retry_index=attempt)
+                continue
+
+            self._raise_upstream_import_error(self._normalize_gacha_upstream_error_message(message))
+
+        self._raise_upstream_import_error("访问过于频繁，请稍后重试")
 
     async def get_owned_account(self, account_id: int, user_id: int) -> MihoyoAccount:
         result = await self.db.execute(
@@ -206,30 +285,12 @@ class GachaService:
             },
         ) as client:
             while True:
-                params = dict(parsed.base_params)
-                params["page"] = str(page)
-                params["size"] = "20"
-                params["end_id"] = end_id
-
-                try:
-                    response = await client.get(parsed.base_url, params=params)
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    self._raise_upstream_import_error(f"上游接口返回异常状态 {exc.response.status_code}")
-                except httpx.HTTPError:
-                    self._raise_upstream_import_error("无法连接上游接口")
-
-                try:
-                    payload = response.json()
-                except Exception:
-                    self._raise_upstream_import_error("上游返回了无法解析的响应")
-
-                if not isinstance(payload, dict):
-                    self._raise_upstream_import_error("上游返回了不符合预期的响应结构")
-
-                if payload.get("retcode") != 0:
-                    message = payload.get("message") or payload.get("msg") or "上游返回失败"
-                    raise HTTPException(status_code=400, detail=f"抽卡记录导入失败：{message}")
+                payload = await self._fetch_gacha_page_payload(
+                    client,
+                    parsed=parsed,
+                    page=page,
+                    end_id=end_id,
+                )
 
                 data_payload = payload.get("data") or {}
                 if not isinstance(data_payload, dict):
@@ -260,6 +321,7 @@ class GachaService:
                     break
                 end_id = next_end_id
                 page += 1
+                await self._sleep_page_interval()
 
                 # 抽卡记录的 end_id 翻页在异常数据下可能出现循环。
                 # 这里设置上限不是为了限制正常用户导入，而是防止坏链接或上游异常把单次导入卡死。
@@ -644,87 +706,7 @@ class GachaService:
         if role is None or not role.game_uid:
             raise HTTPException(status_code=400, detail="该账号缺少可用的原神角色，无法自动导入")
 
-        region = (role.region or GENSHIN_REGION_BY_GAME_BIZ.get(role.game_biz) or "").strip()
-        if not region:
-            raise HTTPException(status_code=400, detail="该原神角色缺少区域信息，无法自动导入")
-
-        ensure_result = await AccountCredentialService(self.db).ensure_work_cookie(account)
-        if ensure_result.get("state") != "valid":
-            detail = str(ensure_result.get("message") or "账号工作 Cookie 不可用")
-            raise HTTPException(status_code=400, detail=detail)
-
-        work_cookie = str(ensure_result.get("cookie") or "").strip()
-        if not work_cookie and account.cookie_encrypted:
-            try:
-                work_cookie = decrypt_cookie(account.cookie_encrypted)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail="账号工作 Cookie 无法解密，无法自动导入") from exc
-        if not work_cookie:
-            raise HTTPException(status_code=400, detail="账号工作 Cookie 不可用")
-
-        params = {
-            "auth_appid": "webview_gacha",
-            "game_biz": role.game_biz,
-            "game_uid": str(role.game_uid),
-            "region": region,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(
-                    GENSHIN_AUTHKEY_API_URL,
-                    params=params,
-                    headers={
-                        "Accept": "application/json",
-                        "Cookie": work_cookie,
-                    },
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=400, detail=f"原神 authkey 生成失败：上游接口返回异常状态 {exc.response.status_code}") from exc
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：无法连接上游接口") from exc
-
-        try:
-            payload = response.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了无法解析的响应") from exc
-
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了不符合预期的响应结构")
-
-        if payload.get("retcode") != 0:
-            message = payload.get("message") or payload.get("msg") or "上游返回失败"
-            raise HTTPException(status_code=400, detail=f"原神 authkey 生成失败：{message}")
-
-        data_payload = payload.get("data") or {}
-        if not isinstance(data_payload, dict):
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了不符合预期的响应结构")
-
-        authkey = str(data_payload.get("authkey") or "").strip()
-        authkey_ver = str(data_payload.get("authkey_ver") or "").strip()
-        sign_type = str(data_payload.get("sign_type") or "").strip()
-        if not authkey or not authkey_ver or not sign_type:
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游未返回完整票据")
-
-        return self._build_genshin_import_url_from_authkey(
-            authkey=authkey,
-            authkey_ver=authkey_ver,
-            sign_type=sign_type,
-        )
-
-    def _build_genshin_import_url_from_authkey(self, *, authkey: str, authkey_ver: str, sign_type: str) -> str:
-        # `authkey` 与完整抽卡 URL 都属于可直接重放抽卡接口的高敏感票据。
-        # 这里故意只在内存里瞬时组装，随后立刻交给现有 URL 导入链路；真正落库的仍只有脱敏后的 `source_url_masked`。
-        # 如果未来有人把完整 URL 顺手写进日志、任务表或异常上报，等价于把账号抽卡查询能力暴露给日志系统。
-        params = {
-            "authkey": authkey,
-            "authkey_ver": authkey_ver,
-            "sign_type": sign_type,
-            "lang": "zh-cn",
-            "gacha_type": "301",
-        }
-        return f"{GENSHIN_GACHA_LOG_API_URL}?{urlencode(params)}"
+        return await GenshinAuthkeyService(self.db).generate_import_url(account, role)
 
 
 gacha_service_type = GachaService
