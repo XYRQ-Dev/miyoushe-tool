@@ -8,21 +8,20 @@
 
     <div class="login-shell">
       <section class="login-brand-panel">
-        <div class="brand-badge">Daily Helper</div>
         <h1>米游社自动签到助手</h1>
-        <p class="brand-desc">登录后即可管理账号、查看状态、执行兑换和整理抽卡记录，常用操作都集中在这里。</p>
+        <p class="brand-desc">一站式管理您的游戏账号、签到状态与抽卡记录。</p>
         <div class="brand-points">
           <div class="brand-point">
             <span class="point-dot"></span>
-            <span>查看账号状态，随时处理失效登录和异常提醒。</span>
+            <span>实时掌控账号状态，及时处理登录失效与异常。</span>
           </div>
           <div class="brand-point">
             <span class="point-dot"></span>
-            <span>执行每日签到、兑换码和抽卡记录整理等常用操作。</span>
+            <span>全自动执行每日签到，支持快捷兑换与抽卡分析。</span>
           </div>
           <div class="brand-point">
             <span class="point-dot"></span>
-            <span>管理员可继续配置菜单权限和邮件通知。</span>
+            <span>灵活的权限与通知配置，确保任务流转稳定可靠。</span>
           </div>
         </div>
       </section>
@@ -33,9 +32,8 @@
             <el-icon :size="30"><Star /></el-icon>
           </div>
           <div>
-            <div class="form-kicker">Access Portal</div>
             <h2>登录与注册</h2>
-            <p>使用已有账号登录，或注册首个管理员账号开始使用。</p>
+            <p>欢迎使用，请登录或注册您的账号。</p>
           </div>
         </div>
 
@@ -215,7 +213,7 @@ async function handleRegister() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, #06111f 0%, #0b1526 100%);
+  background: var(--bg-app-accent), var(--bg-app);
   position: relative;
   overflow: hidden;
   padding: 24px;
@@ -256,10 +254,10 @@ async function handleRegister() {
   position: absolute;
   inset: 8% 12%;
   border-radius: 36px;
-  border: 1px solid rgba(125, 211, 252, 0.08);
+  border: 1px solid var(--border-soft);
   background:
-    linear-gradient(rgba(125, 211, 252, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(125, 211, 252, 0.04) 1px, transparent 1px);
+    linear-gradient(var(--border-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-soft) 1px, transparent 1px);
   background-size: 34px 34px;
   mask-image: radial-gradient(circle at center, black 48%, transparent 82%);
 }
@@ -282,8 +280,8 @@ async function handleRegister() {
 .login-brand-panel,
 .login-card {
   border-radius: 28px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  box-shadow: 0 24px 52px rgba(2, 6, 23, 0.24);
+  border: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-sidebar);
   backdrop-filter: blur(20px);
 }
 
@@ -296,25 +294,6 @@ async function handleRegister() {
     radial-gradient(circle at top right, rgba(56, 189, 248, 0.2), transparent 34%),
     linear-gradient(180deg, rgba(11, 25, 48, 0.92), rgba(13, 31, 58, 0.84));
   color: #e7f0fb;
-}
-
-.brand-badge,
-.form-kicker {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 12px;
-  border-radius: 999px;
-  width: fit-content;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.brand-badge {
-  color: #7dd3fc;
-  background: rgba(125, 211, 252, 0.12);
 }
 
 .login-brand-panel h1 {
@@ -356,12 +335,8 @@ async function handleRegister() {
 }
 
 .login-card {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--bg-elevated);
   padding: 34px;
-}
-
-:global(html.dark) .login-card {
-  background: rgba(12, 25, 45, 0.88);
 }
 
 .logo-area {
@@ -374,7 +349,7 @@ async function handleRegister() {
 .logo-icon {
   width: 56px;
   height: 56px;
-  background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
+  background: var(--bg-primary);
   border-radius: 18px;
   display: flex;
   align-items: center;
@@ -382,11 +357,6 @@ async function handleRegister() {
   color: white;
   flex: 0 0 auto;
   box-shadow: 0 16px 28px rgba(37, 99, 235, 0.22);
-}
-
-.form-kicker {
-  color: var(--brand-secondary);
-  background: rgba(56, 189, 248, 0.08);
 }
 
 .logo-area h2 {
@@ -407,23 +377,12 @@ async function handleRegister() {
   display: none;
 }
 
-.login-tabs :deep(.el-tabs__active-bar) {
-  background: linear-gradient(90deg, #2563eb, #0891b2);
-}
-
 .submit-btn {
   width: 100%;
   margin-top: 8px;
   border-radius: 14px;
   height: 48px;
   font-size: 16px;
-}
-
-.hint-text {
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 12px;
 }
 
 @media (max-width: 980px) {

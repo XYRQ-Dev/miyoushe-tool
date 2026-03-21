@@ -186,6 +186,29 @@ class GachaContractTests(unittest.TestCase):
             f"{urlencode(params)}"
         )
 
+    def _build_starrail_import_url(
+        self,
+        *,
+        game_uid: str | None = None,
+        gacha_type: str | None = None,
+    ) -> str:
+        params = {
+            "authkey": "test-key",
+            "authkey_ver": "1",
+            "sign_type": "2",
+            "auth_appid": "webview_gacha",
+            "lang": "zh-cn",
+            "game_biz": "hkrpg_cn",
+        }
+        if game_uid is not None:
+            params["game_uid"] = game_uid
+        if gacha_type is not None:
+            params["gacha_type"] = gacha_type
+        return (
+            "https://public-operation-hkrpg.mihoyo.com/common/gacha_record/api/getGachaLog?"
+            f"{urlencode(params)}"
+        )
+
     def _build_uigf_payload(self) -> dict:
         return {
             "info": {
@@ -346,6 +369,9 @@ class GachaRateLimitTests(unittest.IsolatedAsyncioTestCase):
     def _build_genshin_import_url(self) -> str:
         return GachaContractTests()._build_genshin_import_url(game_uid="10001")
 
+    def _build_starrail_import_url(self, *, gacha_type: str | None = None) -> str:
+        return GachaContractTests()._build_starrail_import_url(game_uid="80001", gacha_type=gacha_type)
+
     async def test_import_records_retries_rate_limit_then_succeeds(self):
         from app.services.gacha import GachaService
 
@@ -429,6 +455,148 @@ class GachaRateLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sleep_mock.await_count, 3)
         db.commit.assert_not_awaited()
         service._save_page_records.assert_not_called()
+
+    async def test_import_records_scans_all_starrail_pools_when_gacha_type_missing(self):
+        from app.services.gacha import GachaService
+
+        db = DummyGachaDb()
+        service = GachaService(db)
+        service._save_page_records = AsyncMock(side_effect=[(5, 0), (5, 0), (5, 0)])
+        account = type("Account", (), {"id": 1})()
+        starrail_items = lambda prefix, pool: [
+            {
+                "id": f"{prefix}{index}",
+                "name": "测试角色",
+                "item_type": "角色",
+                "rank_type": "5",
+                "gacha_type": pool,
+                "time": f"2026-03-18 12:00:0{index}",
+            }
+            for index in range(5)
+        ]
+        fake_client = FakeAsyncClient(
+            [
+                {"retcode": 0, "message": "OK", "data": {"list": starrail_items("1", "1")}},
+                {"retcode": 0, "message": "OK", "data": {"list": []}},
+                {"retcode": 0, "message": "OK", "data": {"list": starrail_items("11", "11")}},
+                {"retcode": 0, "message": "OK", "data": {"list": starrail_items("12", "12")}},
+            ]
+        )
+        sleep_mock = AsyncMock()
+
+        with (
+            patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+            patch("app.services.gacha.asyncio.sleep", sleep_mock),
+            patch("app.services.gacha.random.randint", return_value=1100),
+        ):
+            response = await service.import_records(
+                account=account,
+                game="starrail",
+                game_uid="80001",
+                import_url=self._build_starrail_import_url(),
+            )
+
+        self.assertEqual(response.inserted_count, 15)
+        self.assertEqual(response.fetched_count, 15)
+        self.assertEqual(response.source_url_masked.count("gacha_type=auto"), 1)
+        self.assertEqual([call["params"]["gacha_type"] for call in fake_client.calls], ["1", "2", "11", "12"])
+        self.assertEqual(service._save_page_records.await_count, 3)
+        self.assertEqual(sleep_mock.await_count, 0)
+        db.commit.assert_awaited_once()
+
+    async def test_import_records_keeps_single_starrail_pool_when_gacha_type_present(self):
+        from app.services.gacha import GachaService
+
+        db = DummyGachaDb()
+        service = GachaService(db)
+        service._save_page_records = AsyncMock(return_value=(5, 0))
+        account = type("Account", (), {"id": 1})()
+        fake_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {
+                        "list": [
+                            {
+                                "id": f"11-{index}",
+                                "name": "希儿",
+                                "item_type": "角色",
+                                "rank_type": "5",
+                                "gacha_type": "11",
+                                "time": f"2026-03-18 12:00:0{index}",
+                            }
+                            for index in range(5)
+                        ]
+                    },
+                }
+            ]
+        )
+
+        with patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client):
+            response = await service.import_records(
+                account=account,
+                game="starrail",
+                game_uid="80001",
+                import_url=self._build_starrail_import_url(gacha_type="11"),
+            )
+
+        self.assertEqual(response.inserted_count, 5)
+        self.assertEqual(len(fake_client.calls), 1)
+        self.assertEqual(fake_client.calls[0]["params"]["gacha_type"], "11")
+        self.assertIn("gacha_type=11", response.source_url_masked)
+        db.commit.assert_awaited_once()
+
+    async def test_import_records_does_not_commit_partial_starrail_results_when_later_pool_fails(self):
+        from app.services.gacha import GachaService
+
+        db = DummyGachaDb()
+        service = GachaService(db)
+        service._save_page_records = AsyncMock(return_value=(5, 0))
+        account = type("Account", (), {"id": 1})()
+        fake_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {
+                        "list": [
+                            {
+                                "id": f"1-{index}",
+                                "name": "测试角色",
+                                "item_type": "角色",
+                                "rank_type": "5",
+                                "gacha_type": "1",
+                                "time": f"2026-03-18 12:00:0{index}",
+                            }
+                            for index in range(5)
+                        ]
+                    },
+                },
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+                {"retcode": -100, "message": "visit too frequently", "data": None},
+            ]
+        )
+        sleep_mock = AsyncMock()
+
+        with (
+            patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+            patch("app.services.gacha.asyncio.sleep", sleep_mock),
+            patch("app.services.gacha.random.randint", side_effect=[2200, 4500, 7500]),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                await service.import_records(
+                    account=account,
+                    game="starrail",
+                    game_uid="80001",
+                    import_url=self._build_starrail_import_url(),
+                )
+
+        self.assertEqual(context.exception.detail, "抽卡记录导入失败：访问过于频繁，请稍后重试")
+        self.assertEqual(service._save_page_records.await_count, 1)
+        db.commit.assert_not_awaited()
 
 
 class GachaTests(MySqlIsolatedAsyncioTestCase):

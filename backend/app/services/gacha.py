@@ -43,6 +43,7 @@ SUPPORTED_GACHA_GAME_CONFIGS = {
             "200": "常驻祈愿",
             "301": "角色活动祈愿",
             "302": "武器活动祈愿",
+            "400": "角色活动祈愿",
             "500": "集录祈愿",
         },
         "supported_role_prefixes": ("hk4e_",),
@@ -71,6 +72,14 @@ class ParsedImportSource:
     base_url: str
     base_params: dict[str, str]
     masked_url: str
+    scan_gacha_types: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ImportRunSummary:
+    fetched_count: int
+    inserted_count: int
+    duplicate_count: int
 
 
 class GachaService:
@@ -104,6 +113,12 @@ class GachaService:
         if self._is_gacha_rate_limited(message):
             return "访问过于频繁，请稍后重试"
         return (message or "").strip() or "上游返回失败"
+
+    # 星铁手贴链接经常只给基础 authkey URL，不包含具体卡池类型。
+    # 如果这里要求用户手工拆成 4 条单池链接，实际体验会退化成“链接明明有效，但导入总是 0 条”，
+    # 维护侧也很难第一眼看出根因是缺 `gacha_type` 而不是票据失效。
+    # 因此仅在星铁手贴链接缺池型参数时，后端兜底按已支持池型逐个扫描并统一去重。
+    STARRAIL_SUPPORTED_GACHA_TYPES = ("1", "2", "11", "12")
 
     @staticmethod
     def _pick_delay_ms(delay_range_ms: tuple[int, int]) -> int:
@@ -271,12 +286,6 @@ class GachaService:
         normalized_game_uid = self._normalize_game_uid(game_uid)
         parsed = self._parse_import_url(game, normalized_game_uid, import_url)
 
-        fetched_count = 0
-        inserted_count = 0
-        duplicate_count = 0
-        page = 1
-        end_id = "0"
-
         async with httpx.AsyncClient(
             timeout=30.0,
             headers={
@@ -284,49 +293,21 @@ class GachaService:
                 "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             },
         ) as client:
-            while True:
-                payload = await self._fetch_gacha_page_payload(
-                    client,
-                    parsed=parsed,
-                    page=page,
-                    end_id=end_id,
-                )
-
-                data_payload = payload.get("data") or {}
-                if not isinstance(data_payload, dict):
-                    self._raise_upstream_import_error("上游返回了不符合预期的响应结构")
-
-                items = data_payload.get("list") or []
-                if not isinstance(items, list):
-                    self._raise_upstream_import_error("上游返回了不符合预期的响应结构")
-                if not items:
-                    break
-
-                fetched_count += len(items)
-                page_inserted, page_duplicates = await self._save_page_records(
+            import_summary = ImportRunSummary(fetched_count=0, inserted_count=0, duplicate_count=0)
+            for import_source in self._expand_import_sources(parsed):
+                source_summary = await self._import_records_from_source(
+                    client=client,
                     account_id=account.id,
                     game=game,
                     game_uid=normalized_game_uid,
-                    items=items,
+                    parsed=import_source,
                     pool_name_map=config["pool_names"],
                 )
-                inserted_count += page_inserted
-                duplicate_count += page_duplicates
-
-                if len(items) < 20:
-                    break
-
-                next_end_id = str(items[-1].get("id") or "").strip()
-                if not next_end_id or next_end_id == end_id:
-                    break
-                end_id = next_end_id
-                page += 1
-                await self._sleep_page_interval()
-
-                # 抽卡记录的 end_id 翻页在异常数据下可能出现循环。
-                # 这里设置上限不是为了限制正常用户导入，而是防止坏链接或上游异常把单次导入卡死。
-                if page > 200:
-                    break
+                import_summary = ImportRunSummary(
+                    fetched_count=import_summary.fetched_count + source_summary.fetched_count,
+                    inserted_count=import_summary.inserted_count + source_summary.inserted_count,
+                    duplicate_count=import_summary.duplicate_count + source_summary.duplicate_count,
+                )
 
         job = GachaImportJob(
             account_id=account.id,
@@ -334,9 +315,9 @@ class GachaService:
             game_uid=normalized_game_uid,
             source_url_masked=parsed.masked_url,
             status="success",
-            fetched_count=fetched_count,
-            inserted_count=inserted_count,
-            duplicate_count=duplicate_count,
+            fetched_count=import_summary.fetched_count,
+            inserted_count=import_summary.inserted_count,
+            duplicate_count=import_summary.duplicate_count,
             message="导入完成",
         )
         self.db.add(job)
@@ -348,11 +329,95 @@ class GachaService:
             account_id=account.id,
             game=game,
             game_uid=normalized_game_uid,
+            fetched_count=import_summary.fetched_count,
+            inserted_count=import_summary.inserted_count,
+            duplicate_count=import_summary.duplicate_count,
+            source_url_masked=parsed.masked_url,
+            message="抽卡记录导入完成",
+        )
+
+    def _expand_import_sources(self, parsed: ParsedImportSource) -> list[ParsedImportSource]:
+        if len(parsed.scan_gacha_types) <= 1:
+            return [parsed]
+
+        import_sources: list[ParsedImportSource] = []
+        for gacha_type in parsed.scan_gacha_types:
+            base_params = dict(parsed.base_params)
+            base_params["gacha_type"] = gacha_type
+            import_sources.append(
+                ParsedImportSource(
+                    base_url=parsed.base_url,
+                    base_params=base_params,
+                    masked_url=parsed.masked_url,
+                    scan_gacha_types=(gacha_type,),
+                )
+            )
+        return import_sources
+
+    async def _import_records_from_source(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        account_id: int,
+        game: str,
+        game_uid: str,
+        parsed: ParsedImportSource,
+        pool_name_map: dict[str, str],
+    ) -> ImportRunSummary:
+        fetched_count = 0
+        inserted_count = 0
+        duplicate_count = 0
+        page = 1
+        end_id = "0"
+
+        while True:
+            payload = await self._fetch_gacha_page_payload(
+                client,
+                parsed=parsed,
+                page=page,
+                end_id=end_id,
+            )
+
+            data_payload = payload.get("data") or {}
+            if not isinstance(data_payload, dict):
+                self._raise_upstream_import_error("上游返回了不符合预期的响应结构")
+
+            items = data_payload.get("list") or []
+            if not isinstance(items, list):
+                self._raise_upstream_import_error("上游返回了不符合预期的响应结构")
+            if not items:
+                break
+
+            fetched_count += len(items)
+            page_inserted, page_duplicates = await self._save_page_records(
+                account_id=account_id,
+                game=game,
+                game_uid=game_uid,
+                items=items,
+                pool_name_map=pool_name_map,
+            )
+            inserted_count += page_inserted
+            duplicate_count += page_duplicates
+
+            if len(items) < 20:
+                break
+
+            next_end_id = str(items[-1].get("id") or "").strip()
+            if not next_end_id or next_end_id == end_id:
+                break
+            end_id = next_end_id
+            page += 1
+            await self._sleep_page_interval()
+
+            # 抽卡记录的 end_id 翻页在异常数据下可能出现循环。
+            # 这里设置上限不是为了限制正常用户导入，而是防止坏链接或上游异常把单次导入卡死。
+            if page > 200:
+                break
+
+        return ImportRunSummary(
             fetched_count=fetched_count,
             inserted_count=inserted_count,
             duplicate_count=duplicate_count,
-            source_url_masked=parsed.masked_url,
-            message="抽卡记录导入完成",
         )
 
     async def import_records_from_account(
@@ -514,8 +579,13 @@ class GachaService:
         five_star = [record for record in records if record.rank_type == "5"]
         four_star_count = sum(1 for record in records if record.rank_type == "4")
         pool_counter: dict[tuple[str, str], int] = {}
+        pool_names_map = SUPPORTED_GACHA_GAME_CONFIGS[game]["pool_names"]
         for record in records:
-            key = (record.pool_type, record.pool_name or record.pool_type)
+            pool_type = record.pool_type
+            # 原神角色活动祈愿 2 (400) 与 1 (301) 共享保底，汇总时归入 301 统计。
+            display_type = "301" if game == "genshin" and pool_type == "400" else pool_type
+            pool_name = pool_names_map.get(display_type, record.pool_name or display_type)
+            key = (display_type, pool_name)
             pool_counter[key] = pool_counter.get(key, 0) + 1
 
         pool_summaries = [
@@ -677,14 +747,29 @@ class GachaService:
         masked_params = dict(params)
         if "authkey" in masked_params:
             masked_params["authkey"] = "***"
+        gacha_type = str(params.get("gacha_type") or "").strip()
+        if game == "starrail" and not gacha_type:
+            # 星铁基础链接缺少 `gacha_type` 时，上游通常不会报错，只会静默返回空列表。
+            # 这里在脱敏来源里显式标成 `auto`，是为了让导入历史能还原“后端做过全池扫描”这一事实，
+            # 否则后续排障会误判成用户贴的是完整单池链接。
+            masked_params["gacha_type"] = "auto"
         masked_url = f"{base_url}?{urlencode(masked_params)}"
 
         # 分页字段由服务端统一接管，避免用户粘贴历史链接时把当前页码锁死在中间页。
         params.pop("page", None)
         params.pop("size", None)
         params.pop("end_id", None)
+        if game == "starrail" and not gacha_type:
+            scan_gacha_types = self.STARRAIL_SUPPORTED_GACHA_TYPES
+        else:
+            scan_gacha_types = (gacha_type,) if gacha_type else ()
 
-        return ParsedImportSource(base_url=base_url, base_params=params, masked_url=masked_url)
+        return ParsedImportSource(
+            base_url=base_url,
+            base_params=params,
+            masked_url=masked_url,
+            scan_gacha_types=scan_gacha_types,
+        )
 
     async def _generate_genshin_authkey(self, account: MihoyoAccount, game_uid: str) -> str:
         normalized_game_uid = self._normalize_game_uid(game_uid)
