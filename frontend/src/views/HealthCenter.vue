@@ -168,7 +168,7 @@
                 size="small"
                 plain
                 :disabled="!account.supported_assets.includes('gacha')"
-                @click="jumpToAsset('/gacha', account.account_id)"
+                @click="jumpToAsset('/gacha', account)"
               >
                 抽卡记录
               </el-button>
@@ -176,7 +176,7 @@
                 size="small"
                 plain
                 :disabled="!account.supported_assets.includes('redeem')"
-                @click="jumpToAsset('/redeem', account.account_id)"
+                @click="jumpToAsset('/redeem', account)"
               >
                 兑换码中心
               </el-button>
@@ -450,10 +450,22 @@ async function handleReauth(account: HealthAccount) {
   }
 }
 
-function jumpToAsset(path: string, accountId: number) {
+function jumpToAsset(path: string, account: HealthAccount) {
+  const query: Record<string, string> = {
+    account_id: String(account.account_id),
+  }
+
+  if (account.supported_games.length === 1) {
+    query.game = account.supported_games[0]
+  }
+
+  // 健康中心当前只有账号级聚合数据，没有角色列表，也没有任何可验证的 `game_uid` 来源。
+  // 这里必须显式坚持“不伪造不存在的角色 UID”：
+  // 1. 若后端未来补了角色级响应，应优先改为真实透传；
+  // 2. 在那之前，宁可只把用户送到账号 / 单游戏落地态，也不能编造 `game_uid` 让抽卡页误选到错误角色。
   router.push({
     path,
-    query: { account_id: String(accountId) },
+    query,
   })
 }
 
