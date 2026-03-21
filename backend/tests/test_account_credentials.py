@@ -42,6 +42,84 @@ class _FakeAsyncClient:
         return _FakeResponse(self._responses.pop(0))
 
 
+class AccountCredentialHelperUnitTests(unittest.TestCase):
+    def _build_account(
+        self,
+        *,
+        stuid: str | None = "10001",
+        mid: str | None = "mid-10001",
+        stoken: str | None = "v2_test_stoken",
+    ) -> MihoyoAccount:
+        account = MihoyoAccount(user_id=1, stuid=stuid, mid=mid)
+        if stoken is not None:
+            account.stoken_encrypted = encrypt_text(stoken)
+        return account
+
+    def test_get_root_credential_snapshot_returns_stuid_mid_stoken(self):
+        from app.services.account_credentials import AccountCredentialService
+
+        service = AccountCredentialService(db=None)
+        account = self._build_account()
+
+        snapshot = service.get_root_credential_snapshot(account)
+        self.assertEqual(snapshot.stuid, "10001")
+        self.assertEqual(snapshot.mid, "mid-10001")
+        self.assertEqual(snapshot.stoken, "v2_test_stoken")
+
+    def test_build_stoken_cookie_for_root_api_contains_stoken_variants_and_mid(self):
+        from app.services.account_credentials import AccountCredentialService
+
+        service = AccountCredentialService(db=None)
+        account = self._build_account()
+
+        cookie = service.build_stoken_cookie_for_root_api(account)
+        self.assertIn("stuid=10001", cookie)
+        self.assertIn("stoken=v2_test_stoken", cookie)
+        self.assertIn("stoken_v2=v2_test_stoken", cookie)
+        self.assertIn("mid=mid-10001", cookie)
+
+    def test_get_root_credential_snapshot_raises_when_stoken_missing(self):
+        from app.services.account_credentials import (
+            ROOT_CREDENTIAL_REAUTH_MESSAGE,
+            AccountCredentialService,
+            RootCredentialRefreshError,
+        )
+
+        service = AccountCredentialService(db=None)
+        account = self._build_account(stoken=None)
+
+        with self.assertRaises(RootCredentialRefreshError) as ctx:
+            service.get_root_credential_snapshot(account)
+        self.assertIn(ROOT_CREDENTIAL_REAUTH_MESSAGE, str(ctx.exception))
+
+    def test_build_stoken_cookie_for_root_api_raises_when_stuid_missing(self):
+        from app.services.account_credentials import (
+            ROOT_CREDENTIAL_REAUTH_MESSAGE,
+            AccountCredentialService,
+            RootCredentialRefreshError,
+        )
+
+        service = AccountCredentialService(db=None)
+        account = self._build_account(stuid=None)
+
+        with self.assertRaises(RootCredentialRefreshError) as ctx:
+            service.build_stoken_cookie_for_root_api(account)
+        self.assertIn(ROOT_CREDENTIAL_REAUTH_MESSAGE, str(ctx.exception))
+
+
+class DsLk2ShapeTests(unittest.TestCase):
+    def test_generate_cn_gen1_ds_lk2_returns_expected_shape(self):
+        from app.utils.ds import generate_cn_gen1_ds_lk2
+
+        ds = generate_cn_gen1_ds_lk2()
+        parts = ds.split(",")
+
+        self.assertEqual(len(parts), 3)
+        self.assertRegex(parts[0], r"^\d+$")
+        self.assertRegex(parts[1], r"^[a-z0-9]{6}$")
+        self.assertRegex(parts[2], r"^[0-9a-f]{32}$")
+
+
 class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
     async def _create_user(self, session: AsyncSession, username: str) -> User:
         # MySQL-only 后 `mihoyo_accounts.user_id -> users.id` 的真实外键会参与提交校验。

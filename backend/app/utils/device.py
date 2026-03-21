@@ -87,6 +87,31 @@ def build_hyperion_headers(
     return headers
 
 
+def build_genshin_authkey_headers(
+    cookie: str,
+    *,
+    device_id: str,
+    ds: str,
+    app_version: str = HYPERION_APP_VERSION,
+) -> dict[str, str]:
+    """
+    构造原神 authkey（LK2）请求头。
+
+    这里必须强制带齐 DS、device_id 与 `Referer=https://app.mihoyo.com`。
+    若误回退到“只带工作 Cookie 的旧 GET 习惯”，接口通常不会给出直观错误，排障会被噪音淹没。
+    """
+    return {
+        "Accept": "application/json",
+        "User-Agent": build_hyperion_user_agent(app_version),
+        "Referer": "https://app.mihoyo.com",
+        "x-rpc-app_version": app_version,
+        "x-rpc-client_type": "5",
+        "x-rpc-device_id": device_id,
+        "DS": ds,
+        "Cookie": cookie,
+    }
+
+
 def build_device_fp_payload(device_id: str, device_fp: str) -> dict:
     """
     构造设备指纹请求体。
