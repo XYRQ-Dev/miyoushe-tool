@@ -47,6 +47,119 @@ class MainModuleImportTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             normalize_database_url("sqlite:///tmp/demo.db")
 
+    def test_get_mihoyo_account_legacy_column_ddls_only_returns_missing_columns(self):
+        from app.database import get_mihoyo_account_legacy_column_ddls
+
+        statements = get_mihoyo_account_legacy_column_ddls(
+            {
+                "id",
+                "user_id",
+                "cookie_encrypted",
+                "stoken_encrypted",
+                "ltoken_encrypted",
+                "stuid",
+                "mid",
+                "cookie_status",
+                "last_cookie_check",
+                "cookie_token_updated_at",
+                "last_refresh_attempt_at",
+                "last_refresh_status",
+                "last_refresh_message",
+                "reauth_notified_at",
+                "created_at",
+            }
+        )
+
+        # 这里锁定“冷启动补列”只补旧库真实缺失的 Passport 根凭据字段，
+        # 避免后续把整个 ORM 结构都粗暴翻译成启动期 DDL，扩大兼容逻辑的破坏面。
+        self.assertEqual(
+            statements,
+            [
+                "ALTER TABLE mihoyo_accounts ADD COLUMN cookie_token_encrypted TEXT NULL",
+                "ALTER TABLE mihoyo_accounts ADD COLUMN login_ticket_encrypted TEXT NULL",
+                "ALTER TABLE mihoyo_accounts ADD COLUMN credential_source VARCHAR(30) NULL",
+                "ALTER TABLE mihoyo_accounts ADD COLUMN credential_status VARCHAR(30) NULL DEFAULT 'reauth_required'",
+                "ALTER TABLE mihoyo_accounts ADD COLUMN last_token_refresh_at DATETIME NULL",
+                "ALTER TABLE mihoyo_accounts ADD COLUMN last_token_refresh_status VARCHAR(30) NULL",
+                "ALTER TABLE mihoyo_accounts ADD COLUMN last_token_refresh_message TEXT NULL",
+            ],
+        )
+
+    def test_gacha_legacy_column_ddls_only_add_missing_game_uid(self):
+        from app.database import (
+            get_gacha_import_job_legacy_index_ddls,
+            get_gacha_import_job_legacy_column_ddls,
+            get_gacha_record_legacy_index_ddls,
+            get_gacha_record_legacy_column_ddls,
+        )
+
+        # 抽卡旧库的兼容目标很窄：只补 `game_uid`，不在冷启动里偷偷扩散成索引/唯一键/历史回填大迁移。
+        self.assertEqual(
+            get_gacha_record_legacy_column_ddls(
+                {
+                    "id",
+                    "account_id",
+                    "game",
+                    "record_id",
+                    "pool_type",
+                    "pool_name",
+                    "item_name",
+                    "item_type",
+                    "rank_type",
+                    "time_text",
+                    "imported_at",
+                }
+            ),
+            ["ALTER TABLE gacha_records ADD COLUMN game_uid VARCHAR(50) NULL"],
+        )
+        self.assertEqual(
+            get_gacha_import_job_legacy_column_ddls(
+                {
+                    "id",
+                    "account_id",
+                    "game",
+                    "source_url_masked",
+                    "status",
+                    "fetched_count",
+                    "inserted_count",
+                    "duplicate_count",
+                    "message",
+                    "created_at",
+                }
+            ),
+            ["ALTER TABLE gacha_import_jobs ADD COLUMN game_uid VARCHAR(50) NULL"],
+        )
+        self.assertEqual(get_gacha_record_legacy_column_ddls({"game_uid"}), [])
+        self.assertEqual(get_gacha_import_job_legacy_column_ddls({"game_uid"}), [])
+        self.assertEqual(
+            get_gacha_record_legacy_index_ddls(
+                {
+                    "uq_gacha_record_account_game_record",
+                    "ix_gacha_records_account_id",
+                    "ix_gacha_records_game",
+                }
+            ),
+            [
+                "ALTER TABLE gacha_records DROP INDEX uq_gacha_record_account_game_record",
+                "ALTER TABLE gacha_records ADD UNIQUE INDEX uq_gacha_record_account_game_uid_record (account_id, game, game_uid, record_id)",
+                "ALTER TABLE gacha_records ADD INDEX ix_gacha_records_game_uid (game_uid)",
+            ],
+        )
+        self.assertEqual(
+            get_gacha_import_job_legacy_index_ddls({"ix_gacha_import_jobs_account_id"}),
+            ["ALTER TABLE gacha_import_jobs ADD INDEX ix_gacha_import_jobs_game_uid (game_uid)"],
+        )
+        self.assertEqual(
+            get_gacha_record_legacy_index_ddls(
+                {
+                    "uq_gacha_record_account_game_uid_record",
+                    "ix_gacha_records_game_uid",
+                }
+            ),
+            [],
+        )
+        self.assertEqual(get_gacha_import_job_legacy_index_ddls({"ix_gacha_import_jobs_game_uid"}), [])
+
     def test_get_test_database_url_requires_mysql_asyncmy_url(self):
         mysql_test_case = import_module("tests.mysql_test_case")
 

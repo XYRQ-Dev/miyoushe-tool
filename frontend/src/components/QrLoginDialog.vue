@@ -244,6 +244,20 @@ function resetDialogState() {
   resetSmsState()
 }
 
+function applyQrProgressStatus(nextStatus: string) {
+  // 后端轮询协议里的 `pending` 只是“尚未扫码确认”的中间态，不是一个可直接展示的 UI 状态。
+  // 如果这里把它原样覆盖到 `status`，模板分支会匹配不到任何内容，表现成“二维码显示几秒后突然消失”。
+  // 维护时不要把协议层状态枚举与界面态一一硬绑；二维码图片一旦已经拿到，未扫码阶段就应持续保持可见。
+  if (nextStatus === 'pending') {
+    status.value = qrImage.value ? 'qr_ready' : 'initializing'
+    return
+  }
+
+  if (nextStatus === 'scanned' || nextStatus === 'success' || nextStatus === 'failed' || nextStatus === 'timeout') {
+    status.value = nextStatus
+  }
+}
+
 function handleDialogClose() {
   resetDialogState()
 }
@@ -273,7 +287,7 @@ function startQrLogin() {
 
     switch (data.type) {
       case 'status':
-        status.value = data.status
+        applyQrProgressStatus(String(data.status || ''))
         break
       case 'qr_code':
         qrImage.value = data.image

@@ -162,6 +162,33 @@ class GenshinAuthkeyHeaderTests(unittest.TestCase):
         self.assertEqual(headers["x-rpc-device_fp"], "device-fp-001")
 
 
+class _CookieShapeSensitiveAsyncClient:
+    def __init__(self):
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url, headers=None):
+        self.calls.append({"method": "GET", "url": url, "headers": headers})
+        cookie = str((headers or {}).get("Cookie") or "")
+        if "stoken=" not in cookie:
+            return _FakeResponse({"retcode": -100, "message": "登录状态失效，请重新登录", "data": {}})
+
+        if "getLTokenBySToken" in url:
+            return _FakeResponse({"retcode": 0, "message": "OK", "data": {"ltoken": "test-ltoken"}})
+
+        return _FakeResponse(
+            {
+                "retcode": 0,
+                "message": "OK",
+                "data": {"uid": "10001", "cookie_token": "test-cookie-token"},
+            }
+        )
+
 class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
     async def _create_user(self, session: AsyncSession, username: str) -> User:
         # MySQL-only 后 `mihoyo_accounts.user_id -> users.id` 的真实外键会参与提交校验。
@@ -217,6 +244,35 @@ class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
         self.assertIn("ltuid=10001", rebuilt_cookie)
         self.assertEqual(fake_client.calls[0]["url"], "https://passport-api.mihoyo.com/account/auth/api/getLTokenBySToken")
         self.assertEqual(fake_client.calls[1]["url"], "https://passport-api.mihoyo.com/account/auth/api/getCookieAccountInfoBySToken")
+
+    async def test_refresh_root_tokens_sends_stoken_cookie_key_for_official_exchange(self):
+        from app.services.account_credentials import AccountCredentialService
+
+        async with await self._new_session() as session:
+            user = await self._create_user(session, "credential-cookie-shape-user")
+            account = MihoyoAccount(
+                user_id=user.id,
+                stoken_encrypted=encrypt_text("v2_test_stoken"),
+                stuid="10001",
+                mid="mid-10001",
+                credential_source="passport_qr",
+                credential_status="valid",
+            )
+            session.add(account)
+            await session.commit()
+
+            fake_client = _CookieShapeSensitiveAsyncClient()
+
+            with patch("app.services.account_credentials.httpx.AsyncClient", new=lambda *args, **kwargs: fake_client):
+                service = AccountCredentialService(session)
+                result = await service.refresh_root_tokens(account)
+
+        self.assertEqual(result["state"], "valid")
+        first_cookie = fake_client.calls[0]["headers"]["Cookie"]
+        self.assertIn("stoken=v2_test_stoken", first_cookie)
+        self.assertIn("stoken_v2=v2_test_stoken", first_cookie)
+        self.assertEqual(decrypt_text(account.ltoken_encrypted), "test-ltoken")
+        self.assertEqual(decrypt_text(account.cookie_token_encrypted), "test-cookie-token")
 
     async def test_refresh_account_login_state_self_heals_when_root_credentials_are_still_valid(self):
         async with await self._new_session() as session:
@@ -293,7 +349,7 @@ class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
         self.assertEqual(account.credential_status, "reauth_required")
         self.assertEqual(account.cookie_status, "reauth_required")
         self.assertEqual(account.last_token_refresh_status, "reauth_required")
-        self.assertIn("重新扫码", account.last_token_refresh_message)
+        self.assertEqual(account.last_token_refresh_message, "高权限根凭据已失效，请重新扫码升级高权限登录")
 
 
 if __name__ == "__main__":

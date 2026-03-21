@@ -149,6 +149,10 @@ class AccountCredentialService:
             f"account_id={effective_stuid}",
             f"account_id_v2={effective_stuid}",
             f"login_uid={effective_stuid}",
+            # 官方这两条换票接口当前识别的是 `stoken=<v2_...>`，而不是只看 `stoken_v2`。
+            # 之前这里仅发送 `stoken_v2`，会让“扫码刚成功拿到的根凭据”在补齐 ltoken/cookie_token 时
+            # 被官方直接判成 `retcode=-100`，表面看像“用户又失效了”，实质却是我们请求构造错了。
+            # 为了兼容潜在仍读取旧键名的链路，这里同时保留 `stoken_v2`，但 `stoken` 不能再缺席。
             f"stoken={normalized_stoken}",
             f"stoken_v2={normalized_stoken}",
         ]
@@ -193,6 +197,12 @@ class AccountCredentialService:
     @staticmethod
     def _build_reauth_message(reason: str) -> str:
         normalized_reason = reason.strip() or ROOT_CREDENTIAL_REAUTH_MESSAGE
+        # 上游常返回“登录状态失效，请重新登录”这类面向通用登录页的提示。
+        # 当前产品语义是“重新扫码升级高权限登录”，若直接把两套动作串起来，
+        # 用户会看到“请重新登录，请重新扫码升级高权限登录”这种重复且互相打架的文案。
+        # 这里把明确指向登录失效/重新登录的原因统一收口为高权限失效提示，保留操作指向单一。
+        if any(token in normalized_reason for token in ("登录状态失效", "登录失效", "重新登录")):
+            return ROOT_CREDENTIAL_REAUTH_MESSAGE
         if "重新扫码" in normalized_reason:
             return normalized_reason
         return f"{normalized_reason}，请重新扫码升级高权限登录"
