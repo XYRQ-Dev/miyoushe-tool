@@ -127,6 +127,33 @@ class SystemSettingsService:
             updated_at=utc_now_naive(),
         )
 
+    def _session_has_pending_state(self) -> bool:
+        """
+        判断当前业务 session 是否挂着尚未提交的其它改动。
+
+        MySQL 默认可重复读隔离级别下，若当前事务已经开启，再用独立事务插入 `system_settings`，
+        当前 session 后续查询往往仍看不到那一行；但如果这里直接提交当前 session，
+        又会把调用方尚未确认的业务改动一并提前落库。
+
+        因此这里必须先区分：
+        - 干净 session：允许直接在当前事务内创建并提交，保证同 session 立刻可见
+        - 脏 session：继续走隔离事务，守住“不提前提交无关业务数据”的边界
+        """
+        return bool(self.db.new or self.db.dirty or self.db.deleted)
+
+    async def _persist_default_config_in_current_session(self) -> SystemSetting:
+        """
+        在当前干净 session 中创建默认配置。
+
+        只有确认 session 不存在其它待提交实体时，才允许直接 commit 当前事务；
+        否则会破坏调用方对事务边界的预期。
+        """
+        config = self._build_default_config()
+        self.db.add(config)
+        await self.db.commit()
+        await self.db.refresh(config)
+        return config
+
     async def _persist_default_config_in_isolated_session(self) -> SystemSetting:
         """
         在独立事务中确保默认系统配置行存在。
@@ -177,6 +204,11 @@ class SystemSettingsService:
         except (OperationalError, ProgrammingError) as exc:
             if not self._is_missing_storage_error(exc):
                 raise
+            # 这里必须先回滚当前 session，再去另一条连接上执行补表/补列 DDL。
+            # 否则本次失败查询留下的事务上下文仍会持有旧表的 metadata lock，
+            # 后续 `ALTER TABLE system_settings ...` 在 MySQL 下会一直等待自己释放锁，
+            # 表面现象就是“legacy 补列接口卡死”，实际根因是恢复 DDL 被当前事务反向阻塞。
+            await self.db.rollback()
             await self.ensure_storage_ready(force=True)
             with self.db.no_autoflush:
                 result = await self.db.execute(
@@ -187,7 +219,10 @@ class SystemSettingsService:
         if config is not None:
             return config
 
-        persisted_config = await self._persist_default_config_in_isolated_session()
+        if self._session_has_pending_state():
+            persisted_config = await self._persist_default_config_in_isolated_session()
+        else:
+            persisted_config = await self._persist_default_config_in_current_session()
         return await self.db.merge(persisted_config, load=False)
 
     async def get_menu_visibility(self) -> AdminMenuVisibilityResponse:

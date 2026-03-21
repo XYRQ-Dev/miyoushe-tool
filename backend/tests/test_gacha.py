@@ -79,6 +79,60 @@ class FakeAsyncClient:
         return FakeResponse(payload)
 
 
+class FakeScalarResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+    def scalar_one(self):
+        return self._value
+
+
+class FakeBeginContext:
+    def __init__(self, connection):
+        self._connection = connection
+
+    async def __aenter__(self):
+        return self._connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeEngine:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def begin(self):
+        return FakeBeginContext(self._connection)
+
+
+class FakeAsyncConnection:
+    def __init__(self):
+        async def _exec_driver_sql(sql, params=None):
+            if "GET_LOCK" in sql or "RELEASE_LOCK" in sql:
+                return FakeScalarResult(1)
+            return None
+
+        self.exec_driver_sql = AsyncMock(side_effect=_exec_driver_sql)
+        self.run_sync = AsyncMock()
+        self.execute = AsyncMock()
+
+
+class FakeLockConnection:
+    def __init__(self):
+        self.exec_driver_sql = AsyncMock(return_value=FakeScalarResult(1))
+        self.close = AsyncMock()
+
+
+class FakeLockEngine:
+    def __init__(self, connection):
+        self._connection = connection
+        self.connect = AsyncMock(return_value=connection)
+
+
 class GachaContractTests(unittest.TestCase):
     def _build_genshin_import_url(self, *, game_uid: str | None = None) -> str:
         params = {
@@ -210,24 +264,52 @@ class GachaContractTests(unittest.TestCase):
                 self.assertTrue(game_uid_param.required)
 
 
+class MySqlIsolatedAsyncioTestCaseContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reset_schema_recreates_tables_once_when_opted_in(self):
+        class RebuildCase(MySqlIsolatedAsyncioTestCase):
+            recreate_schema = True
+
+            def runTest(self):
+                return None
+
+        case = RebuildCase(methodName="runTest")
+        conn = FakeAsyncConnection()
+        case.engine = FakeEngine(conn)
+
+        await case._reset_schema()
+
+        run_sync_call_names = [call.args[0].__name__ for call in conn.run_sync.await_args_list]
+        self.assertEqual(run_sync_call_names, ["drop_all", "create_all"])
+        conn.execute.assert_not_awaited()
+        sql_calls = [call.args[0] for call in conn.exec_driver_sql.await_args_list]
+        self.assertEqual(sql_calls, ["SET FOREIGN_KEY_CHECKS = 0", "SET FOREIGN_KEY_CHECKS = 1"])
+
+    async def test_database_lock_wraps_each_mysql_test_case(self):
+        class DummyCase(MySqlIsolatedAsyncioTestCase):
+            def runTest(self):
+                return None
+
+        case = DummyCase(methodName="runTest")
+        lock_connection = FakeLockConnection()
+        case.engine = FakeLockEngine(lock_connection)
+
+        await case._acquire_database_lock()
+        self.assertIn("SELECT GET_LOCK", lock_connection.exec_driver_sql.await_args.args[0])
+        self.assertIn(case._lock_name, lock_connection.exec_driver_sql.await_args.args[0])
+        self.assertIs(case._lock_connection, lock_connection)
+
+        await case._release_database_lock()
+        sql_calls = [call.args[0] for call in lock_connection.exec_driver_sql.await_args_list]
+        self.assertIn("SELECT RELEASE_LOCK", sql_calls[-1])
+        lock_connection.close.assert_awaited_once()
+        self.assertIsNone(case._lock_connection)
+
+
 class GachaTests(MySqlIsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
-        await self._rebuild_schema()
-
-    async def _rebuild_schema(self) -> None:
-        async with self.engine.begin() as conn:
-            # 抽卡模型本轮直接切换了唯一键与字段集合。
-            # 这里显式重建表结构，是为了避免测试库残留旧 schema 时 `create_all()` 静默跳过，
-            # 最终把“库结构没更新”误判成业务逻辑回归。
-            await conn.run_sync(self._drop_and_create_all)
-
-    @staticmethod
-    def _drop_and_create_all(sync_conn) -> None:
-        from app.database import Base
-
-        Base.metadata.drop_all(sync_conn)
-        Base.metadata.create_all(sync_conn)
+    # 抽卡模型这轮刚切到 `game_uid` 三维唯一键。
+    # 这里要求测试基座直接走 drop/create，一次性把旧 schema 残留清空；
+    # 否则历史库里若还留着旧唯一键，`create_all()` 不会报错，但后续断言会在错误结构上运行。
+    recreate_schema = True
 
     async def _new_session(self):
         return self.session_factory()
@@ -531,6 +613,11 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
             [
                 {"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "主号", "region": "cn_gf01"},
                 {"game_biz": "hk4e_cn", "game_uid": "10002", "nickname": "小号", "region": "cn_gf01"},
+                # 这里额外放一个账号真实拥有、但 UIGF 文件并未包含的 UID，
+                # 用来锁定“账号校验通过后，仍要继续报文件缺少目标 UID”的分支。
+                # 如果直接传完全不存在于账号下的 UID，接口会更早在账号/角色权限校验处失败，
+                # 该测试就不再是在验证 UIGF 解析边界，而是误测了前置鉴权。
+                {"game_biz": "hk4e_cn", "game_uid": "10003", "nickname": "缺档号", "region": "cn_gf01"},
             ]
         )
 
@@ -562,7 +649,7 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                     GachaImportUIGFRequest(
                         account_id=account.id,
                         game="genshin",
-                        game_uid="99999",
+                        game_uid="10003",
                         source_name="backup.uigf.json",
                         uigf_json=self._build_uigf_payload(),
                     ),

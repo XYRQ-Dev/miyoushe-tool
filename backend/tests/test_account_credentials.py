@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import MihoyoAccount
+from app.models.user import User
 from app.services.login_state import LoginStateService
 from app.utils.crypto import decrypt_cookie, decrypt_text, encrypt_cookie, encrypt_text
 from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
@@ -42,12 +43,22 @@ class _FakeAsyncClient:
 
 
 class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
+    async def _create_user(self, session: AsyncSession, username: str) -> User:
+        # MySQL-only 后 `mihoyo_accounts.user_id -> users.id` 的真实外键会参与提交校验。
+        # 这里若偷懒写死 `user_id=1` 而不先落父记录，测试失败点会从“登录态逻辑是否正确”
+        # 退化成“测试数据本身不合法”，掩盖我们真正想验证的凭据刷新行为。
+        user = User(username=username, password_hash="x", role="user", is_active=True)
+        session.add(user)
+        await session.flush()
+        await session.refresh(user)
+        return user
 
     async def test_persist_login_result_fetches_root_tokens_and_rebuilds_cookie(self):
         from app.services.account_credentials import AccountCredentialService
 
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1)
+            user = await self._create_user(session, "credential-persist-user")
+            account = MihoyoAccount(user_id=user.id)
             session.add(account)
             await session.commit()
 
@@ -89,8 +100,9 @@ class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_refresh_account_login_state_self_heals_when_root_credentials_are_still_valid(self):
         async with await self._new_session() as session:
+            user = await self._create_user(session, "credential-refresh-user")
             account = MihoyoAccount(
-                user_id=1,
+                user_id=user.id,
                 cookie_encrypted=encrypt_cookie("ltuid=10001; cookie_token=expired-cookie-token"),
                 cookie_status="expired",
                 stoken_encrypted=encrypt_text("v2_test_stoken"),
@@ -134,8 +146,9 @@ class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
         from app.services.account_credentials import AccountCredentialService
 
         async with await self._new_session() as session:
+            user = await self._create_user(session, "credential-ensure-user")
             account = MihoyoAccount(
-                user_id=1,
+                user_id=user.id,
                 cookie_encrypted=encrypt_cookie("ltuid=10001; cookie_token=expired-cookie-token"),
                 cookie_status="expired",
                 stoken_encrypted=encrypt_text("v2_test_stoken"),

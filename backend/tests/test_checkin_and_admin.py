@@ -78,6 +78,16 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             SystemSettingsService._storage_ready_sync_engines.clear()
         await super().asyncTearDown()
 
+    async def _create_user(self, session: AsyncSession, username: str) -> User:
+        # SQLite 时代不少测试直接把 `user_id=1` 塞给账号夹具也能混过去，
+        # 但 MySQL-only 后外键会真实校验 `mihoyo_accounts.user_id -> users.id`。
+        # 这里统一显式建父用户，避免后续有人又把“业务失败”与“测试夹具先违法 FK”混在一起。
+        user = User(username=username, password_hash="x", role="user", is_active=True)
+        session.add(user)
+        await session.flush()
+        await session.refresh(user)
+        return user
+
     async def test_register_creates_default_task_config(self):
         async with await self._new_session() as session:
             user = await register(
@@ -149,7 +159,14 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_get_or_create_persists_system_settings_without_committing_unrelated_session_changes(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, nickname="事务边界账号", cookie_status="valid")
+            # MySQL-only 测试下外键会真实生效，不能再像旧 SQLite 用例那样假设 `user_id=1`
+            # 必然存在；这里必须先落真实用户，才能把“系统配置初始化不会提前提交账号脏数据”
+            # 与“测试夹具本身违反外键约束”区分开。
+            user = User(username="txn-boundary-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            account = MihoyoAccount(user_id=user.id, nickname="事务边界账号", cookie_status="valid")
             session.add(account)
             await session.commit()
             await session.refresh(account)
@@ -205,8 +222,10 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_scheduler_load_all_schedules_creates_missing_default_config_and_registers_job(self):
         async with await self._new_session() as session:
-            session.add(User(username="missing-config-user", password_hash="x", role="user", is_active=True))
+            user = User(username="missing-config-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
             await session.commit()
+            await session.refresh(user)
 
         service = SchedulerService()
         service.scheduler.start()
@@ -219,7 +238,9 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
             self.assertEqual(config.cron_expr, "0 6 * * *")
             self.assertTrue(config.is_enabled)
-            self.assertIsNotNone(service.scheduler.get_job("checkin_user_1"))
+            # MySQL 测试基座当前只清空数据、不重置 AUTO_INCREMENT；
+            # 若把 job id 写死为 `checkin_user_1`，前序用例留下的自增序列会让“任务已注册”被误判成失败。
+            self.assertIsNotNone(service.scheduler.get_job(f"checkin_user_{user.id}"))
         finally:
             service.stop()
 
@@ -476,7 +497,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_calls_short_and_long_delays_in_starward_positions(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-delay-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
@@ -499,7 +521,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service._sleep_between_roles = AsyncMock()
 
             with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.success, 1)
         service._sleep_between_info_and_sign.assert_awaited_once()
@@ -507,7 +529,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_reuses_today_success_log_without_calling_upstream(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid", nickname="测试账号")
+            user = await self._create_user(session, "checkin-cache-success-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid", nickname="测试账号")
             session.add(account)
             await session.flush()
             role = GameRole(
@@ -539,7 +562,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service._do_sign = AsyncMock()
 
             with patch("app.services.checkin.get_current_app_date", return_value=date(2026, 3, 17), create=True):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
             log_count = (
                 await session.execute(select(TaskLog).where(TaskLog.account_id == account.id))
@@ -558,7 +581,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_reuses_today_already_signed_log_without_calling_upstream(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-cache-already-signed-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", region="cn_gf01", is_enabled=True)
@@ -583,7 +607,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service._do_sign = AsyncMock()
 
             with patch("app.services.checkin.get_current_app_date", return_value=date(2026, 3, 17), create=True):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.total, 1)
         self.assertEqual(summary.already_signed, 1)
@@ -595,7 +619,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_does_not_short_circuit_today_failed_log(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-failed-log-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
@@ -633,7 +658,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
                 return_value=date(2026, 3, 17),
                 create=True,
             ):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.success, 1)
         self.assertEqual(summary.already_signed, 0)
@@ -643,7 +668,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_uses_latest_today_log_status_for_short_circuit(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-latest-log-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
@@ -690,7 +716,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
                 return_value=date(2026, 3, 17),
                 create=True,
             ):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.success, 1)
         self.assertEqual(summary.already_signed, 0)
@@ -699,7 +725,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_only_short_circuits_matching_role(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid", nickname="测试账号")
+            user = await self._create_user(session, "checkin-matching-role-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid", nickname="测试账号")
             session.add(account)
             await session.flush()
             cached_role = GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="10001", region="cn_gf01", is_enabled=True)
@@ -736,7 +763,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
                 return_value=date(2026, 3, 17),
                 create=True,
             ):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
             logs = (
                 await session.execute(
@@ -757,7 +784,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_does_not_reuse_yesterday_success_log(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-yesterday-log-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn", is_enabled=True)
@@ -796,7 +824,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
                 return_value=date(2026, 3, 17),
                 create=True,
             ):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.success, 1)
         self.assertEqual(summary.already_signed, 0)
@@ -805,7 +833,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_runs_bh3_cn_checkin(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-bh3-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="bh3_cn", game_uid="30001", region="android01", is_enabled=True)
@@ -826,7 +855,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             )
 
             with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.total, 1)
         self.assertEqual(summary.success, 1)
@@ -835,7 +864,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_runs_nap_cn_checkin(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-nap-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             role = GameRole(account_id=account.id, game_biz="nap_cn", game_uid="20001", region="prod_gf_cn", is_enabled=True)
@@ -856,7 +886,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             )
 
             with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.total, 1)
         self.assertEqual(summary.success, 1)
@@ -865,7 +895,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_execute_for_user_still_skips_unsupported_games_without_logging_failure(self):
         async with await self._new_session() as session:
-            account = MihoyoAccount(user_id=1, cookie_encrypted="encrypted", cookie_status="valid")
+            user = await self._create_user(session, "checkin-unsupported-game-user")
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
             session.add(account)
             await session.flush()
             session.add(GameRole(account_id=account.id, game_biz="nxx_cn", game_uid="40001", region="prod_gf_cn", is_enabled=True))
@@ -877,7 +908,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service._do_sign = AsyncMock()
 
             with patch("app.services.checkin.decrypt_cookie", return_value="ltuid=1;"):
-                summary = await service.execute_for_user(1)
+                summary = await service.execute_for_user(user.id)
 
         self.assertEqual(summary.total, 0)
         self.assertEqual(summary.failed, 0)
@@ -1020,8 +1051,9 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_refresh_account_login_state_marks_valid_when_cookie_verifies(self):
         async with await self._new_session() as session:
+            user = await self._create_user(session, "login-state-valid-user")
             account = MihoyoAccount(
-                user_id=1,
+                user_id=user.id,
                 cookie_encrypted="encrypted-cookie",
                 cookie_status="expired",
                 # 这里显式补齐高权限根凭据，确保本用例验证的是
@@ -1785,8 +1817,13 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             config = await service.settings_service.get_or_create()
             self.assertFalse(config.smtp_enabled)
 
-            stored = (await session.execute(select(SystemSetting))).scalar_one()
-            self.assertEqual(stored.id, config.id)
+        async with await self._new_session() as verify_session:
+            # `get_or_create()` 会在独立短事务里补建默认配置，避免把调用方 session 的其他脏数据一并提交。
+            # MySQL 的当前事务快照不会自动看见那笔独立提交，因此这里必须用新 session 验证真实落库结果，
+            # 否则测试测到的只是“旧事务还没刷新视图”，不是 system_settings 自愈失败。
+            stored = (await verify_session.execute(select(SystemSetting))).scalar_one()
+
+        self.assertEqual(stored.id, config.id)
 
     async def test_get_me_returns_visible_menu_keys_by_role(self):
         async with await self._new_session() as session:

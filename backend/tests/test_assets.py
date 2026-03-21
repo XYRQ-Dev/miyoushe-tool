@@ -19,17 +19,9 @@ from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
 class RoleAssetOverviewTests(MySqlIsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        await super().asyncSetUp()
-        async with self.engine.begin() as conn:
-            await conn.run_sync(self._drop_and_create_all)
-
-    @staticmethod
-    def _drop_and_create_all(sync_conn) -> None:
-        from app.database import Base
-
-        Base.metadata.drop_all(sync_conn)
-        Base.metadata.create_all(sync_conn)
+    # 资产总览会直接读抽卡相关表结构。
+    # 这里同样要求每个用例都以最新 ORM 元数据重建 schema，避免旧索引/旧列残留把“抽卡已归档”聚合测歪。
+    recreate_schema = True
 
     async def _new_session(self):
         return self.session_factory()
