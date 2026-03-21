@@ -56,6 +56,14 @@ export const authApi = {
 export const accountApi = {
   list: () => api.get('/accounts'),
   startQrLogin: () => api.post('/accounts/qr-login'),
+  createSmsLoginCaptcha: (data: { mobile: string; aigis?: string }) =>
+    api.post('/accounts/sms-login/captcha', data),
+  verifySmsLogin: (data: {
+    mobile: string
+    captcha: string
+    action_type: string
+    aigis?: string
+  }) => api.post('/accounts/sms-login/verify', data),
   delete: (id: number) => api.delete(`/accounts/${id}`),
   refreshCookie: (id: number) => api.post(`/accounts/${id}/refresh-cookie`),
   checkLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
@@ -112,19 +120,21 @@ export const gachaApi = {
   getAccounts: () => api.get('/gacha/accounts'),
   import: (data: { account_id: number | null; game: string; import_url: string }) =>
     api.post('/gacha/import', data),
+  importFromAccount: (data: { account_id: number; game: string }) =>
+    api.post('/gacha/import-from-account', data),
+  // 正式文件交换协议已经切换到 UIGF。
+  // 前端继续保留“自定义 records 数组”只会制造第二套私有协议，后续前后端很容易再次漂移。
+  importUigf: (data: {
+    account_id: number | null
+    game: string
+    source_name?: string
+    uigf_json: string | Record<string, any>
+  }) => api.post('/gacha/import-uigf', data),
   importJson: (data: {
     account_id: number | null
     game: string
     source_name?: string
-    records: Array<{
-      record_id: string
-      pool_type: string
-      pool_name?: string | null
-      item_name: string
-      item_type?: string | null
-      rank_type: string
-      time_text: string
-    }>
+    uigf_json: string | Record<string, any>
   }) => api.post('/gacha/import-json', data),
   getSummary: (params: { account_id: number; game: string }) =>
     api.get('/gacha/summary', { params }),
@@ -136,6 +146,8 @@ export const gachaApi = {
     page_size: number
   }) =>
     api.get('/gacha/records', { params }),
+  exportUigf: (params: { account_id: number; game: string }) =>
+    api.get('/gacha/export-uigf', { params }),
   exportJson: (params: { account_id: number; game: string }) =>
     api.get('/gacha/export', { params }),
   reset: (params: { account_id: number; game: string }) =>

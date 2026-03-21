@@ -4,7 +4,7 @@
       <div class="page-title-group">
         <div class="page-kicker">Asset Archive</div>
         <h2 class="page-title">抽卡记录中心</h2>
-        <p class="page-desc">导入抽卡链接后即可查看统计结果和历史记录。</p>
+        <p class="page-desc">选择账号与游戏后，可手贴完整抽卡链接；原神还支持从账号自动导入，也可导入或导出 UIGF 备份。</p>
       </div>
       <div class="page-actions">
         <div class="soft-chip">{{ latestImportMessage }}</div>
@@ -16,7 +16,7 @@
         <div class="section-header">
           <div>
             <div class="section-title">导入抽卡记录</div>
-            <div class="section-desc">选择账号与游戏后，粘贴完整抽卡链接即可开始归档。</div>
+            <div class="section-desc">{{ importSectionDescription }}</div>
           </div>
         </div>
       </template>
@@ -77,33 +77,46 @@
             :disabled="!canImport"
             @click="handleImport"
           >
-            开始导入
+            开始导入链接
+          </el-button>
+          <el-button
+            v-if="showImportFromAccount"
+            :loading="accountImporting"
+            :disabled="!canImportFromAccount"
+            @click="handleImportFromAccount"
+          >
+            从账号自动导入
           </el-button>
           <el-button :icon="Refresh" @click="loadPageData">刷新数据</el-button>
         </div>
+
+        <div v-if="selectedGame" class="game-scope-hint">
+          {{ gameScopeHint }}
+        </div>
+
         <div class="backup-actions">
           <input
-            ref="jsonFileInput"
+            ref="uigfFileInput"
             type="file"
             accept="application/json,.json"
             class="hidden-file-input"
-            @change="handleJsonFileChange"
+            @change="handleUigfFileChange"
           />
           <el-button
             plain
-            :disabled="!selectedAccountId || !selectedGame || importing || jsonImporting"
-            :loading="jsonImporting"
-            @click="openJsonFilePicker"
+            :disabled="!selectedAccountId || !selectedGame || isImportBusy"
+            :loading="uigfImporting"
+            @click="openUigfFilePicker"
           >
-            导入 JSON
+            导入 UIGF
           </el-button>
           <el-button
             plain
             :disabled="!selectedAccountId || !selectedGame || exporting"
             :loading="exporting"
-            @click="handleExportJson"
+            @click="handleExportUigf"
           >
-            导出 JSON
+            导出 UIGF
           </el-button>
           <el-button
             type="danger"
@@ -204,7 +217,7 @@
           <template #default>
             <el-empty
               v-if="!records.length"
-              description="暂无抽卡记录，先在上方导入一条完整链接"
+              :description="emptyRecordsDescription"
               :image-size="88"
             />
             <template v-else>
@@ -263,7 +276,8 @@ const selectedAccountId = ref<number | null>(null)
 const selectedGame = ref('')
 const importUrl = ref('')
 const importing = ref(false)
-const jsonImporting = ref(false)
+const accountImporting = ref(false)
+const uigfImporting = ref(false)
 const exporting = ref(false)
 const resetting = ref(false)
 const recordsLoading = ref(false)
@@ -274,7 +288,7 @@ const currentPage = ref(1)
 const pageSize = 20
 const poolFilter = ref<string | undefined>()
 const latestImportMessage = ref('尚未执行导入')
-const jsonFileInput = useTemplateRef<HTMLInputElement>('jsonFileInput')
+const uigfFileInput = useTemplateRef<HTMLInputElement>('uigfFileInput')
 const route = useRoute()
 const routeAccountPrefillConsumed = ref(false)
 const routeGamePrefillConsumed = ref(false)
@@ -290,8 +304,34 @@ const availableGames = computed(() => {
     .filter(Boolean)
 })
 
+// 当前后端只支持原神通过账号根凭据生成 authkey 自动导入。
+// 星铁仍然只有“手贴链接 / UIGF 文件交换”两种入口；如果前端把按钮也放出来，
+// 用户会误以为后端已经支持星铁账号直连导入，排障时会被错误入口带偏。
+const showImportFromAccount = computed(() => selectedGame.value === 'genshin')
+const isImportBusy = computed(() => importing.value || accountImporting.value || uigfImporting.value)
+const canImportFromAccount = computed(() => Boolean(
+  selectedAccountId.value &&
+  showImportFromAccount.value &&
+  !isImportBusy.value
+))
+const importSectionDescription = computed(() => (
+  showImportFromAccount.value
+    ? '原神可直接从账号自动导入，也支持手贴完整链接或导入 UIGF 备份。'
+    : '当前游戏支持手贴完整链接导入，以及导入或导出 UIGF 备份。'
+))
+const gameScopeHint = computed(() => (
+  showImportFromAccount.value
+    ? '原神支持三种入口：手贴链接、从账号自动导入、导入 UIGF。'
+    : '星穹铁道当前只提供手贴链接导入、导入 UIGF、导出 UIGF。'
+))
+const emptyRecordsDescription = computed(() => (
+  showImportFromAccount.value
+    ? '暂无抽卡记录，先在上方导入完整链接、账号数据或 UIGF 备份'
+    : '暂无抽卡记录，先在上方导入完整链接或 UIGF 备份'
+))
+
 const canImport = computed(() => Boolean(
-  selectedAccountId.value && selectedGame.value && importUrl.value.trim()
+  selectedAccountId.value && selectedGame.value && importUrl.value.trim() && !isImportBusy.value
 ))
 
 function formatAccountLabel(account: GachaAccount) {
@@ -383,6 +423,14 @@ async function loadPageData() {
   await Promise.all([loadSummary(), loadRecords()])
 }
 
+async function refreshAfterImport(message: string, successMessage: string) {
+  latestImportMessage.value = message
+  ElMessage.success(successMessage)
+  currentPage.value = 1
+  poolFilter.value = undefined
+  await Promise.all([loadSummary(), loadRecords()])
+}
+
 async function handleImport() {
   if (!canImport.value) return
   importing.value = true
@@ -392,51 +440,39 @@ async function handleImport() {
       game: selectedGame.value,
       import_url: importUrl.value.trim(),
     })
-    latestImportMessage.value = `本次新增 ${data.inserted_count} 条，跳过重复 ${data.duplicate_count} 条`
-    ElMessage.success(data.message || '抽卡记录导入完成')
     importUrl.value = ''
-    currentPage.value = 1
-    poolFilter.value = undefined
-    await Promise.all([loadSummary(), loadRecords()])
+    await refreshAfterImport(
+      `链接导入新增 ${data.inserted_count} 条，跳过重复 ${data.duplicate_count} 条`,
+      data.message || '抽卡记录导入完成'
+    )
   } finally {
     importing.value = false
   }
 }
 
-function openJsonFilePicker() {
-  jsonFileInput.value?.click()
-}
+async function handleImportFromAccount() {
+  if (!selectedAccountId.value || selectedGame.value !== 'genshin') return
 
-function normalizeJsonRecords(payload: any) {
-  const rawRecords = Array.isArray(payload) ? payload : payload?.records
-  if (!Array.isArray(rawRecords)) {
-    throw new Error('JSON 文件结构无效，缺少 records 数组')
+  accountImporting.value = true
+  try {
+    const { data } = await gachaApi.importFromAccount({
+      account_id: selectedAccountId.value,
+      game: selectedGame.value,
+    })
+    await refreshAfterImport(
+      `账号自动导入新增 ${data.inserted_count} 条，跳过重复 ${data.duplicate_count} 条`,
+      data.message || '已从账号自动导入抽卡记录'
+    )
+  } finally {
+    accountImporting.value = false
   }
-
-  return rawRecords.map((record, index) => {
-    const recordId = String(record.record_id ?? record.id ?? '').trim()
-    const poolType = String(record.pool_type ?? '').trim()
-    const itemName = String(record.item_name ?? '').trim()
-    const rankType = String(record.rank_type ?? '').trim()
-    const timeText = String(record.time_text ?? record.time ?? '').trim()
-
-    if (!recordId || !poolType || !itemName || !rankType || !timeText) {
-      throw new Error(`第 ${index + 1} 条记录缺少关键字段`)
-    }
-
-    return {
-      record_id: recordId,
-      pool_type: poolType,
-      pool_name: record.pool_name ?? null,
-      item_name: itemName,
-      item_type: record.item_type ?? null,
-      rank_type: rankType,
-      time_text: timeText,
-    }
-  })
 }
 
-async function handleJsonFileChange(event: Event) {
+function openUigfFilePicker() {
+  uigfFileInput.value?.click()
+}
+
+async function handleUigfFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file || !selectedAccountId.value || !selectedGame.value) {
@@ -444,54 +480,52 @@ async function handleJsonFileChange(event: Event) {
     return
   }
 
-  jsonImporting.value = true
+  uigfImporting.value = true
   try {
     const text = await file.text()
-    const parsed = JSON.parse(text)
-    const records = normalizeJsonRecords(parsed)
-    const { data } = await gachaApi.importJson({
+    // 正式文件交换协议已经统一为 UIGF，前端不再把文件解析成私有 `records` 数组。
+    // 兼容版本、字段归一化与错误语义都以后端 UIGF 适配层为单一事实来源；
+    // 如果这里继续做前端自定义转换，最容易出现“页面能导，导出的备份却无法标准互通”的双协议回归。
+    const { data } = await gachaApi.importUigf({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
       source_name: file.name,
-      records,
+      uigf_json: text,
     })
-    latestImportMessage.value = `JSON 导入新增 ${data.inserted_count} 条，跳过重复 ${data.duplicate_count} 条`
-    ElMessage.success(data.message || 'JSON 导入完成')
-    currentPage.value = 1
-    poolFilter.value = undefined
-    await Promise.all([loadSummary(), loadRecords()])
+    await refreshAfterImport(
+      `UIGF 导入新增 ${data.inserted_count} 条，跳过重复 ${data.duplicate_count} 条`,
+      data.message || 'UIGF 导入完成'
+    )
   } catch (error: any) {
-    if (error instanceof SyntaxError) {
-      ElMessage.error('JSON 文件格式无效，请检查内容后重试')
-    } else if (error instanceof Error) {
-      ElMessage.error(error.message)
+    if (!error?.response) {
+      ElMessage.error(error instanceof Error ? error.message : '读取 UIGF 文件失败，请稍后重试')
     }
   } finally {
     input.value = ''
-    jsonImporting.value = false
+    uigfImporting.value = false
   }
 }
 
-async function handleExportJson() {
+async function handleExportUigf() {
   if (!selectedAccountId.value || !selectedGame.value) return
 
   exporting.value = true
   try {
-    const { data } = await gachaApi.exportJson({
+    const { data } = await gachaApi.exportUigf({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
     })
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
+    const blob = new Blob([JSON.stringify(data.uigf, null, 2)], { type: 'application/json;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `gacha-${selectedGame.value}-account-${selectedAccountId.value}.json`
+    link.download = `uigf-${selectedGame.value}-account-${selectedAccountId.value}.json`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-    ElMessage.success(`已导出 ${data.total || 0} 条抽卡记录`)
+    ElMessage.success(`已导出 ${data.total || 0} 条 UIGF 抽卡记录`)
   } finally {
     exporting.value = false
   }
@@ -621,7 +655,15 @@ onMounted(loadPageData)
 .import-actions {
   margin-top: 20px;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.game-scope-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
 }
 
 .backup-actions {
@@ -814,7 +856,8 @@ onMounted(loadPageData)
     width: 100%;
   }
 
-  .backup-actions {
+  .backup-actions,
+  .import-actions {
     flex-direction: column;
     align-items: stretch;
   }

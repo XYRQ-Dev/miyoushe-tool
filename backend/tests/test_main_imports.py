@@ -25,8 +25,12 @@ class MainModuleImportTests(unittest.TestCase):
     def test_qr_login_success_path_dependencies_are_imported(self):
         import app.main as main_module
 
-        self.assertTrue(callable(main_module.encrypt_text))
-        self.assertTrue(hasattr(main_module, "qr_login_manager"))
+        # 当前正式二维码登录成功链路已经切到 Passport 会话管理器 +
+        # AccountCredentialService 统一落库入口。
+        # 这里锁定的是“app.main 仍然暴露现行成功路径真正依赖的对象”，
+        # 避免后续重构时测试继续盯着已退役的网页登录依赖面，导致误报或错误回滚。
+        self.assertTrue(callable(main_module.AccountCredentialService))
+        self.assertTrue(hasattr(main_module, "passport_login_manager"))
 
     def test_detect_setting_source_prefers_environment_then_dotenv(self):
         from app.config import detect_setting_source

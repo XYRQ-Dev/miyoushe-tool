@@ -1,11 +1,11 @@
 # 米游社自动签到 Web 平台
 
-基于 `FastAPI + Vue 3 + MySQL 8 + Playwright` 的米游社账号资产管理平台，支持扫码登录、网页登录态校验、手动/定时签到、角色资产总览、抽卡记录归档、兑换码中心、账号健康中心、邮件通知和管理员后台配置。
+基于 `FastAPI + Vue 3 + MySQL 8` 的米游社账号资产管理平台，当前正式登录底座为米游社官方 `Passport/HoyoPlay` 高权限登录，支持高权限账号绑定、登录态校验与自动修复、手动/定时签到、角色资产总览、抽卡记录归档、兑换码中心、账号健康中心、邮件通知和管理员后台配置。
 
 ## 功能概览
 
-- 米游社账号扫码登录与 Cookie 保存
-- 账号网页登录态校验与失效重登提醒
+- 米游社官方 Passport 高权限登录，支持二维码登录与短信验证码根凭据校验
+- 账号登录态校验、工作 Cookie 自动修复与旧网页登录账号升级提示
 - 原神、星穹铁道、崩坏3、绝区零的国服官服角色签到
 - 手动立即签到与定时签到
 - 手动签到与定时签到共用同一套邮件通知策略
@@ -13,7 +13,7 @@
 - 日志接口与前端展示统一按东八区语义处理
 - 角色资产总览，按账号聚合角色、抽卡与兑换入口
 - 账号健康中心，聚合登录态、签到结果与重登风险
-- 抽卡记录中心，支持链接导入、JSON 导入导出、按游戏重置与基础统计
+- 抽卡记录中心，支持链接导入、原神账号自动导入、UIGF v4.2 导入导出、按游戏重置与基础统计
 - 兑换码中心，支持按游戏筛选账号、批量执行与历史批次回看
 - 用户个人通知邮箱、通知策略与深色模式设置
 - 管理员系统 SMTP 配置、菜单与功能开关管理、用户启停管理
@@ -55,7 +55,6 @@ cd backend
 python -m venv .venv313
 .\.venv313\Scripts\activate
 pip install -r requirements.txt
-python -m playwright install chromium
 # 本机已安装 MySQL 时，先创建空库并在 .env 中配置 DATABASE_URL；
 # 例如：mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -155,9 +154,10 @@ docker compose up -d --build backend frontend
 ### 4. 加密密钥配置
 
 - `ENCRYPTION_KEY` 必须通过 `.env` 或环境变量显式固定
-- 如果仍使用运行期随机默认值，服务重启后旧 Cookie 与旧敏感密文会无法解密
+- 如果仍使用运行期随机默认值，服务重启后旧高权限根凭据、工作 Cookie 与其他敏感密文都会无法解密
 - 这和“网页登录扫码能否拿到 `stoken`”是两个不同问题，不能混为一谈
-- 当前网页登录凭据边界见 [docs/maintenance/web-login-credential-boundary.md](docs/maintenance/web-login-credential-boundary.md)
+- 当前高权限登录维护边界见 [docs/maintenance/passport-high-privilege-login.md](docs/maintenance/passport-high-privilege-login.md)
+- 网页登录为什么不再作为正式能力，见 [docs/maintenance/web-login-credential-boundary.md](docs/maintenance/web-login-credential-boundary.md)
 
 ### 5. 外观配置
 
@@ -174,18 +174,31 @@ docker compose up -d --build backend frontend
 
 ### 7. 登录态校验
 
-当前版本只保留“网页登录态校验 + 重新扫码更新凭据”：
+当前版本的正式账号链路已经切到 `Passport/HoyoPlay` 高权限登录，运行时采用“两层凭据模型”：
+
+- 根凭据：`stoken / ltoken / cookie_token / login_ticket / stuid / mid`
+- 工作 Cookie：`cookie_encrypted`
+
+系统对外的稳定语义是：
 
 - 调度器每天会统一巡检账号登录态
 - 手动签到、定时签到前，如果账号状态不是 `valid`，也会先做一次登录态校验
-- 如果校验明确失败，账号会进入 `reauth_required`，并向用户发送“需要重新扫码”的专用邮件提醒
-- 系统不再承诺自动续期，也不再把网页扫码包装成 App 凭据补齐能力
+- 工作 Cookie 失效时，系统会优先尝试利用高权限根凭据自动补齐；只有根凭据也失效时才会进入 `reauth_required`
+- 旧网页登录 Cookie-only 账号会被明确标记为“需要升级登录”，不再被当成正式高权限账号
+- 网页扫码链路只保留为历史背景诊断结论，不再作为正式产品能力
 
 账号中心当前会显示：
 
 - 当前登录态
+- 是否已接入高权限根凭据
 - 最近一次校验时间
 - 最近一次校验结果摘要
+
+抽卡记录中心当前会显示：
+
+- 正式交换协议为 `UIGF v4.2`
+- 原神支持“手贴完整链接 / 从账号自动导入 / 导入导出 UIGF”
+- 星穹铁道当前只支持“手贴完整链接 / 导入导出 UIGF”
 
 ### 8. 签到链路差异
 
@@ -250,13 +263,14 @@ docker compose up -d --build backend frontend
 
 当账号进入 `reauth_required` 时，表示当前系统已经确认：
 
-- Cookie 已无法直接使用
-- 需要通过重新扫码更新网页登录态
+- 当前工作 Cookie 已无法直接使用
+- 且 Passport 高权限根凭据也已经无法继续自动修复
+- 需要通过重新扫码更新高权限登录态
 
 这时继续点“校验登录态”通常只会重复得到同一结论，正确处理方式是：
 
 - 直接点击账号卡片里的“重新扫码登录”
-- 扫码成功后，系统会覆盖更新原账号的网页登录 Cookie 和角色列表
+- 扫码成功后，系统会覆盖更新原账号的高权限根凭据、工作 Cookie 和角色列表
 
 为了避免打扰，登录态失效邮件默认只会在账号首次进入 `reauth_required` 时发送一次；
 如果账号恢复后再次失效，才会重新发送。
@@ -323,9 +337,12 @@ npm run build
 ## 维护提示
 
 - 当前生产默认以 MySQL 8 为准；如果需要从 SQLite 升级，请走显式迁移脚本，不要再依赖“重启后自动补列”
-- `ENCRYPTION_KEY` 必须固定；如果仍使用运行期随机默认值，服务重启后旧 Cookie 会无法解密
-- 当前网页登录链路的可用凭据边界见 [docs/maintenance/web-login-credential-boundary.md](docs/maintenance/web-login-credential-boundary.md)，不要再基于拿不到的数据设计产品能力
+- `ENCRYPTION_KEY` 必须固定；如果仍使用运行期随机默认值，服务重启后旧高权限根凭据与工作 Cookie 都会无法解密
+- 正式登录底座已经切到官方 Passport，高权限凭据边界见 [docs/maintenance/passport-high-privilege-login.md](docs/maintenance/passport-high-privilege-login.md)
+- 历史网页登录链路的凭据边界见 [docs/maintenance/web-login-credential-boundary.md](docs/maintenance/web-login-credential-boundary.md)，不要再基于拿不到的数据设计产品能力
 - 账号进入 `reauth_required` 后，通知和 UI 都要保持“明确但不过度惊扰”的语义，避免一边高频发信、一边在页面里堆原始错误文本
+- 抽卡正式交换协议为 `UIGF v4.2`；不要再把私有 JSON records 数组当成对外标准
+- 原神账号自动导入目前只支持原神；看到 `hkrpg` 的 UIGF 字段并不意味着星穹铁道也已支持账号直连导入
 - 签到链路不要随意删减设备参数、`DS` 或风控延迟，这些机制必须成套存在
 - 崩坏3与绝区零存在游戏专属活动参数与请求头差异，后续若要重构签到配置，请先保留“按游戏覆盖 URL / Referer / signgame”的能力
 - 管理员 SMTP 与用户通知邮箱是两层配置，排障时不要混淆

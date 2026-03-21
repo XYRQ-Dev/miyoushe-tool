@@ -9,6 +9,7 @@
 import uuid
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +20,45 @@ from app.models.gacha import GachaImportJob, GachaRecord
 from app.schemas.account import AccountResponse, AccountListResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
 from app.services.login_state import LoginStateService
+from app.services.passport_login import PassportLoginService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/accounts", tags=["米哈游账号"])
+
+
+class SmsLoginCaptchaRequest(BaseModel):
+    """
+    短信验证码发送请求。
+
+    当前 Task 3 只负责把短信登录后端链路打通，不做账号落库。
+    这里故意只收手机号和可选 aigis，避免把“发送验证码”和“保存账号”提前耦合，
+    否则后续一旦风控参数变化，接口边界会被持久化逻辑一并拖着改。
+    """
+
+    mobile: str
+    aigis: str | None = None
+
+
+class SmsLoginVerifyRequest(BaseModel):
+    """
+    短信验证码校验请求。
+
+    `action_type` 必须由“发送验证码”接口返回后原样回传；不要在前端或其他调用方自造，
+    否则当官方后续调整动作标识时，会出现“验证码明明正确但登录始终失败”的隐蔽问题。
+    """
+
+    mobile: str
+    captcha: str
+    action_type: str
+    aigis: str | None = None
+
+
+def _has_high_privilege_auth(account: MihoyoAccount) -> bool:
+    return bool(account.stoken_encrypted and account.stuid and account.mid)
+
+
+def _is_legacy_cookie_only_account(account: MihoyoAccount) -> bool:
+    return bool(account.cookie_encrypted and not _has_high_privilege_auth(account))
 
 
 async def _build_account_response(
@@ -30,11 +67,23 @@ async def _build_account_response(
     account: MihoyoAccount,
     roles: list[GameRole],
 ) -> AccountResponse:
+    # 账号列表是前端判断“这个账号能不能继续作为正式登录入口使用”的唯一稳定协议面。
+    # 这里必须把旧 Cookie-only 账号统一收口为升级语义，而不是信任库里历史残留的
+    # `credential_status`。否则旧版本曾写入的 `valid/None` 会被原样透出，前端就会把
+    # 实际只能依赖低权限网页登录 Cookie 的账号误判成“高权限凭据正常”或“尚未检查”。
+    has_high_privilege_auth = _has_high_privilege_auth(account)
+    upgrade_required = _is_legacy_cookie_only_account(account)
+    credential_status = "reauth_required" if upgrade_required else account.credential_status
+
     return AccountResponse(
         id=account.id,
         user_id=account.user_id,
         nickname=account.nickname,
         mihoyo_uid=account.mihoyo_uid,
+        has_high_privilege_auth=has_high_privilege_auth,
+        credential_status=credential_status,
+        credential_source=account.credential_source,
+        upgrade_required=upgrade_required,
         cookie_status=account.cookie_status,
         last_cookie_check=account.last_cookie_check,
         last_refresh_attempt_at=account.last_refresh_attempt_at,
@@ -85,11 +134,49 @@ async def list_accounts(
 @router.post("/qr-login", response_model=QrLoginStartResponse)
 async def start_qr_login(current_user: User = Depends(get_current_user)):
     """
-    发起扫码登录会话。
+    发起官方 Passport 扫码登录会话。
     返回 session_id，前端通过 WebSocket 连接获取二维码图片。
     """
     session_id = str(uuid.uuid4())
     return QrLoginStartResponse(session_id=session_id)
+
+
+@router.post("/sms-login/captcha")
+async def create_sms_login_captcha(
+    request: SmsLoginCaptchaRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    发送 Passport 短信登录验证码。
+
+    当前接口只返回风控透传参数和动作标识，不直接创建账号。
+    若在这里提前落库，会把“验证码发送成功”和“账号已完成高权限登录”混成同一个状态，
+    让后续维护者很难判断失败到底发生在发送阶段还是凭据解析阶段。
+    """
+    _ = current_user
+    service = PassportLoginService()
+    return await service.create_login_captcha(request.mobile, aigis=request.aigis)
+
+
+@router.post("/sms-login/verify")
+async def verify_sms_login(
+    request: SmsLoginVerifyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    校验短信验证码并返回 Passport 根凭据。
+
+    Task 3 到此为止只负责“拿到统一结构的登录结果”，
+    持久化和工作 Cookie 补齐交给后续任务处理，避免当前接口越权承担多阶段职责。
+    """
+    _ = current_user
+    service = PassportLoginService()
+    return await service.login_by_mobile_captcha(
+        mobile=request.mobile,
+        captcha=request.captcha,
+        action_type=request.action_type,
+        aigis=request.aigis,
+    )
 
 
 @router.delete("/{account_id}")
@@ -141,13 +228,13 @@ async def refresh_cookie(
     current_user: User = Depends(get_current_user),
 ):
     """
-    刷新指定账号的 Cookie（重新扫码）。
+    重新发起指定账号的高权限扫码登录。
     返回新的 session_id，与 qr-login 流程一致。
     """
     session_id = str(uuid.uuid4())
     return QrLoginStartResponse(
         session_id=session_id,
-        message="请重新扫码以刷新 Cookie",
+        message="请重新扫码以更新高权限登录态",
     )
 
 

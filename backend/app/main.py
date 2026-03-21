@@ -22,15 +22,11 @@ from sqlalchemy import select
 from app.config import detect_setting_source, settings
 from app.database import init_db, async_session
 from app.models.account import MihoyoAccount
+from app.services.account_credentials import AccountCredentialService
 from app.services.browser import browser_manager
-from app.services.qr_login import qr_login_manager
+from app.services.passport_login import passport_login_manager
 from app.services.scheduler import scheduler_service
-from app.services.checkin import CheckinService
-from app.services.account_role_sync import sync_account_roles
-from app.services.login_state import LoginStateService
 from app.services.system_settings import SystemSettingsService
-from app.utils.crypto import encrypt_cookie, encrypt_text
-from app.utils.timezone import utc_now_naive
 
 # Windows 下如果事件循环策略退回到 SelectorEventLoop，`asyncio.create_subprocess_exec`
 # 会直接抛 `NotImplementedError`，而扫码登录对 Playwright 子进程是硬依赖。
@@ -141,14 +137,14 @@ async def qr_login_websocket(
 
     流程：
     1. 前端连接 WebSocket
-    2. 后端启动网页登录二维码会话并推送二维码图片
+    2. 后端创建官方 Passport 二维码并推送二维码图片
     3. 轮询扫码状态并向前端同步进度
-    4. 登录成功后提取网页登录 Cookie 并保存
-    5. 保存后返回成功结果，不再附带已下线能力的额外探测状态
+    4. 登录成功后只保存高权限根凭据字段
+    5. 工作 Cookie 补齐留给后续任务，不在当前链路里伪造“已可直接业务调用”
     """
     await websocket.accept()
 
-    session = qr_login_manager.create_session(session_id, user_id)
+    session = passport_login_manager.create_session(session_id, user_id)
 
     try:
         await websocket.send_json({"type": "status", "status": "initializing"})
@@ -175,16 +171,15 @@ async def qr_login_websocket(
             await websocket.send_json({"type": "status", "status": status})
 
             if status == "success":
-                cookie_str = await session.extract_cookies()
-                if not cookie_str:
+                login_result = session.get_login_result()
+                if not login_result:
                     await websocket.send_json({
                         "type": "error",
-                        "message": session.error_message or "提取 Cookie 失败",
+                        "message": session.error_message or "解析官方登录结果失败",
                     })
                     return
 
                 async with async_session() as db:
-                    token_info = LoginStateService.parse_login_tokens(cookie_str)
                     if account_id is not None:
                         account_result = await db.execute(
                             select(MihoyoAccount).where(
@@ -204,45 +199,20 @@ async def qr_login_websocket(
                         db.add(account)
                         await db.flush()
 
-                    account.cookie_encrypted = encrypt_cookie(cookie_str)
-                    account.cookie_status = "valid"
-                    account.stoken_encrypted = (
-                        encrypt_text(token_info["stoken"]) if token_info["stoken"] else None
-                    )
-                    account.stuid = token_info["stuid"]
-                    account.mid = token_info["mid"]
-                    account.last_cookie_check = utc_now_naive()
-                    account.cookie_token_updated_at = utc_now_naive()
-                    account.last_refresh_status = "success"
-                    # 用户当前能稳定依赖的是“网页登录态已更新”这件事。
-                    # 即便底层偶发拿到额外字段，也不再把它包装成自动续期或 App 凭据能力，
-                    # 以免后续维护者再次把不可稳定获得的数据误判成正式支持范围。
-                    account.last_refresh_message = "登录成功并已更新网页登录态"
-                    account.last_refresh_attempt_at = utc_now_naive()
-                    account.reauth_notified_at = None
-
-                    checkin_service = CheckinService(db)
-                    roles = await checkin_service.fetch_game_roles(cookie_str)
-                    await sync_account_roles(
-                        db=db,
-                        account_id=account.id,
-                        role_payloads=roles,
-                    )
-
-                    if roles:
-                        account.nickname = roles[0].get("nickname", "")
-                        account.mihoyo_uid = roles[0].get("game_uid", "")
-                    elif session.account_mihoyo_uid:
-                        account.mihoyo_uid = session.account_mihoyo_uid
+                    # 登录成功后的字段写库、自愈补齐、工作 Cookie 重建必须统一走同一个服务入口。
+                    # 如果继续在 WebSocket 成功分支手写一组字段，后续短信登录、自愈重建和旧账号升级
+                    # 很快就会出现状态字段不一致的问题，维护者也无法再判断“哪个入口才是准绳”。
+                    credential_service = AccountCredentialService(db)
+                    await credential_service.persist_login_result(account, login_result)
 
                     await db.commit()
                     await db.refresh(account)
 
                 await websocket.send_json({
                     "type": "success",
-                    "message": "登录成功",
+                    "message": account.last_refresh_message or "高权限根凭据已保存",
                     "account_id": account.id,
-                    "roles_count": len(roles),
+                    "roles_count": 0,
                 })
                 break
 
@@ -274,7 +244,7 @@ async def qr_login_websocket(
         except Exception:
             pass
     finally:
-        await qr_login_manager.remove_session(session_id)
+        await passport_login_manager.remove_session(session_id)
 
 
 @app.get("/api/health")

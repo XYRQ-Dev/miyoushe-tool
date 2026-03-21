@@ -93,13 +93,25 @@ async def ensure_account_columns(target_engine: AsyncEngine) -> None:
     """
     columns_to_add = {
         "stoken_encrypted": "TEXT",
+        "ltoken_encrypted": "TEXT",
+        "cookie_token_encrypted": "TEXT",
+        "login_ticket_encrypted": "TEXT",
         "stuid": "VARCHAR(50)",
         "mid": "VARCHAR(100)",
+        # 旧 SQLite 库最初只知道“工作 Cookie 是否可用”，并不知道“根凭据是否还能自愈”。
+        # 这里补齐 `credential_*` 和 `last_token_refresh_*`，是为了让历史账号升级后也能表达
+        # 高权限登录状态；否则资产页、健康中心和后续自愈逻辑只能看到一半真相。
+        # 误删这些补列项时，新建库通常察觉不到问题，但老库会在真正读取账号状态时才爆炸。
+        "credential_source": "VARCHAR(30)",
+        "credential_status": "VARCHAR(30)",
         "cookie_token_updated_at": "DATETIME",
         "last_refresh_attempt_at": "DATETIME",
         "last_refresh_status": "VARCHAR(30)",
         "last_refresh_message": "TEXT",
         "reauth_notified_at": "DATETIME",
+        "last_token_refresh_at": "DATETIME",
+        "last_token_refresh_status": "VARCHAR(30)",
+        "last_token_refresh_message": "TEXT",
     }
 
     async with target_engine.begin() as conn:

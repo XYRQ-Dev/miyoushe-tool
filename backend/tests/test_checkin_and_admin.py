@@ -1036,6 +1036,12 @@ class CheckinAndAdminTests(unittest.IsolatedAsyncioTestCase):
                 user_id=1,
                 cookie_encrypted="encrypted-cookie",
                 cookie_status="expired",
+                # 这里显式补齐高权限根凭据，确保本用例验证的是
+                # “已接入 Passport 根凭据的账号在 Cookie 校验成功时会回到 valid”，
+                # 而不是被 Task 5 的旧网页登录账号升级逻辑提前短路成 reauth_required。
+                stoken_encrypted="encrypted-stoken",
+                stuid="10001",
+                mid="mid-10001",
             )
             session.add(account)
             await session.commit()

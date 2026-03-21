@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import AsyncMock, patch
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
@@ -47,6 +48,71 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.summary.gacha_archived_games, 0)
         self.assertEqual(response.accounts, [])
 
+    async def test_old_cookie_only_account_requires_upgrade_in_account_list(self):
+        from app.api.accounts import list_accounts
+
+        async with await self._new_session() as session:
+            user = User(username="legacy-account-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            legacy_account = MihoyoAccount(
+                user_id=user.id,
+                nickname="旧网页登录账号",
+                mihoyo_uid="10003",
+                cookie_encrypted=encrypt_cookie("ltuid=10003; cookie_token=legacy-cookie-token"),
+                cookie_status="valid",
+                # 这里刻意模拟线上旧数据被历史逻辑写成 `valid` 的脏状态。
+                # Task 5 的目标不是“只有空值时兜底”，而是无论旧值看起来多正常，
+                # 只要账号仍停留在 Cookie-only 形态，列表都必须强制收口为“需要升级登录”。
+                credential_status="valid",
+            )
+            session.add(legacy_account)
+            await session.commit()
+
+            response = await list_accounts(current_user=user, db=session)
+
+        self.assertEqual(response.total, 1)
+        self.assertTrue(response.accounts[0].upgrade_required)
+        self.assertEqual(response.accounts[0].credential_status, "reauth_required")
+        self.assertFalse(response.accounts[0].has_high_privilege_auth)
+
+    async def test_refresh_login_state_requires_legacy_account_to_upgrade_high_privilege_auth(self):
+        from app.services.login_state import LoginStateService
+
+        async with await self._new_session() as session:
+            user = User(username="legacy-refresh-user", password_hash="x", role="user", is_active=True)
+            session.add(user)
+            await session.flush()
+
+            legacy_account = MihoyoAccount(
+                user_id=user.id,
+                nickname="旧网页登录账号",
+                mihoyo_uid="10004",
+                cookie_encrypted=encrypt_cookie("ltuid=10004; cookie_token=legacy-cookie-token"),
+                cookie_status="valid",
+            )
+            session.add(legacy_account)
+            await session.commit()
+
+            service = LoginStateService(session)
+            service.verify_cookie = AsyncMock(return_value={"state": "valid", "message": "登录态有效"})
+
+            with patch(
+                "app.services.login_state.notification_service.send_reauth_required_notification",
+                new_callable=AsyncMock,
+            ) as mock_notify:
+                response = await service.refresh_account_login_state(legacy_account)
+
+            await session.refresh(legacy_account)
+
+        self.assertEqual(response["cookie_status"], "reauth_required")
+        self.assertEqual(legacy_account.cookie_status, "reauth_required")
+        self.assertEqual(legacy_account.credential_status, "reauth_required")
+        self.assertEqual(legacy_account.last_refresh_status, "reauth_required")
+        self.assertIn("升级高权限", response["message"])
+        mock_notify.assert_awaited_once()
+
     async def test_get_role_asset_overview_aggregates_roles_assets_and_recent_status(self):
         from app.api.assets import get_role_asset_overview
 
@@ -63,8 +129,14 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
                 cookie_status="valid",
                 cookie_encrypted=encrypt_cookie("ltuid=10001; cookie_token=test-token"),
                 stoken_encrypted=encrypt_text("v2_test_stoken"),
+                ltoken_encrypted=encrypt_text("v2_test_ltoken"),
+                cookie_token_encrypted=encrypt_text("test_cookie_token"),
+                login_ticket_encrypted=encrypt_text("test_login_ticket"),
                 stuid="10001",
                 mid="mid-10001",
+                credential_source="passport_qr",
+                credential_status="valid",
+                last_token_refresh_status="valid",
             )
             reauth_account = MihoyoAccount(
                 user_id=user.id,
@@ -184,6 +256,14 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.summary.total_accounts, 2)
         self.assertEqual(response.summary.total_roles, 4)
         self.assertEqual(response.summary.gacha_archived_games, 1)
+
+        # 这里显式给账号灌入新的高权限根凭据字段，目的是锁定一个兼容约束：
+        # 角色资产总览仍然只读取它真正关心的账号/角色/日志/抽卡聚合信息，
+        # 不能因为账号模型新增了根凭据状态字段，就意外改变总览统计或卡片聚合行为。
+        # 如果后续有人把这些新字段直接耦合进资产聚合主逻辑，最容易出现的回归就是
+        # “登录能力升级了，但资产页统计、角色卡片或入口显隐反而被改坏”。
+        self.assertEqual(stable_account.credential_status, "valid")
+        self.assertEqual(stable_account.credential_source, "passport_qr")
 
         account_map = {account.account_id: account for account in response.accounts}
         self.assertNotIn(foreign_account.id, account_map)

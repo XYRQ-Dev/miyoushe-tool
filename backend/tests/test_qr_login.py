@@ -27,9 +27,10 @@ crypto_module.decrypt_text = lambda value: value
 sys.modules.setdefault("app.utils.crypto", crypto_module)
 
 from app.services.qr_login import QrLoginSession
+from app.services.passport_login import PassportQrLoginSession
 
 
-class QrLoginSessionTests(unittest.IsolatedAsyncioTestCase):
+class LegacyWebQrLoginSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_qr_image_returns_canvas_screenshot_when_already_in_qr_mode(self):
         session = QrLoginSession("session-1", 1)
         session.page = AsyncMock()
@@ -136,6 +137,84 @@ class QrLoginSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("v2_secret_token", str(diagnostics))
         self.assertNotIn("mid_secret", str(diagnostics))
         self.assertNotIn("cookie_secret", str(diagnostics))
+
+
+class _FakePassportLoginService:
+    def __init__(self, *, create_result, query_results):
+        self._create_result = create_result
+        self._query_results = list(query_results)
+        self.create_call_count = 0
+        self.query_tickets = []
+
+    async def create_qr_login(self):
+        self.create_call_count += 1
+        return self._create_result
+
+    async def query_qr_login_status(self, ticket: str):
+        self.query_tickets.append(ticket)
+        if not self._query_results:
+            raise AssertionError("测试桩未提供足够的轮询结果")
+        return self._query_results.pop(0)
+
+
+class PassportQrLoginSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_qr_image_returns_png_base64_from_passport_url(self):
+        service = _FakePassportLoginService(
+            create_result={
+                "ticket": "ticket-1",
+                "url": "https://user.mihoyo.com/qr?ticket=ticket-1",
+            },
+            query_results=[],
+        )
+        session = PassportQrLoginSession("passport-1", 1, login_service=service)
+
+        await session.start()
+        image = await session.get_qr_image()
+
+        self.assertEqual(session.status, "qr_ready")
+        self.assertEqual(service.create_call_count, 1)
+        self.assertIsNotNone(image)
+        self.assertTrue(base64.b64decode(image).startswith(b"\x89PNG\r\n\x1a\n"))
+
+    async def test_poll_login_status_returns_success_after_confirmed_and_stores_login_result(self):
+        service = _FakePassportLoginService(
+            create_result={
+                "ticket": "ticket-2",
+                "url": "https://user.mihoyo.com/qr?ticket=ticket-2",
+            },
+            query_results=[
+                {"status": "Scanned"},
+                {
+                    "status": "Confirmed",
+                    "stoken": "v2_test_stoken",
+                    "stuid": "10001",
+                    "mid": "mid-10001",
+                    "login_ticket": "ticket-1",
+                    "credential_source": "passport_qr",
+                },
+            ],
+        )
+        session = PassportQrLoginSession("passport-2", 1, login_service=service)
+
+        await session.start()
+
+        first_status = await session.poll_login_status()
+        second_status = await session.poll_login_status()
+
+        self.assertEqual(first_status, "scanned")
+        self.assertEqual(second_status, "success")
+        self.assertEqual(service.query_tickets, ["ticket-2", "ticket-2"])
+        self.assertEqual(
+            session.get_login_result(),
+            {
+                "status": "Confirmed",
+                "stoken": "v2_test_stoken",
+                "stuid": "10001",
+                "mid": "mid-10001",
+                "login_ticket": "ticket-1",
+                "credential_source": "passport_qr",
+            },
+        )
 
 
 if __name__ == "__main__":

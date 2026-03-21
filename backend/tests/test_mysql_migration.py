@@ -11,7 +11,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.database import Base, build_engine_kwargs, normalize_database_url
+from app.database import Base, build_engine_kwargs, ensure_account_columns, normalize_database_url
 from app.migrations.sqlite_to_mysql import CORE_TABLE_MIGRATION_ORDER, migrate_sqlite_core_data
 from app.config import Settings
 from app.models.account import GameRole, MihoyoAccount
@@ -58,6 +58,62 @@ class MySqlMigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("connect_args", kwargs)
         self.assertTrue(kwargs["pool_pre_ping"])
         self.assertEqual(kwargs["pool_recycle"], 3600)
+
+    async def test_ensure_account_columns_backfills_high_privilege_credential_columns_for_legacy_sqlite(self):
+        legacy_path = self._create_temp_db_path()
+        try:
+            legacy_engine = create_async_engine(
+                self._sqlite_file_url(legacy_path),
+                connect_args={"check_same_thread": False},
+            )
+
+            async with legacy_engine.begin() as conn:
+                # 这里显式手工创建旧版 `mihoyo_accounts` 结构，而不是直接复用 ORM 建表，
+                # 目的是锁定“补列逻辑能否把历史低权限库升级到当前高权限字段集合”这件事。
+                # 如果后续有人误删补列项，最直接的后果不是新库创建失败，而是老库在读取账号时
+                # 才因为缺列报错，排障会比建库阶段暴露问题更晚、更隐蔽。
+                await conn.exec_driver_sql(
+                    """
+                    CREATE TABLE mihoyo_accounts (
+                        id INTEGER PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        nickname VARCHAR(100),
+                        mihoyo_uid VARCHAR(50),
+                        cookie_encrypted TEXT,
+                        stoken_encrypted TEXT,
+                        stuid VARCHAR(50),
+                        mid VARCHAR(100),
+                        cookie_status VARCHAR(20),
+                        last_cookie_check DATETIME,
+                        cookie_token_updated_at DATETIME,
+                        last_refresh_attempt_at DATETIME,
+                        last_refresh_status VARCHAR(30),
+                        last_refresh_message TEXT,
+                        reauth_notified_at DATETIME,
+                        created_at DATETIME
+                    )
+                    """
+                )
+
+            await ensure_account_columns(legacy_engine)
+
+            async with legacy_engine.begin() as conn:
+                result = await conn.exec_driver_sql("PRAGMA table_info(mihoyo_accounts)")
+                columns = {row[1] for row in result.fetchall()}
+
+            self.assertIn("credential_status", columns)
+            self.assertIn("credential_source", columns)
+            self.assertIn("ltoken_encrypted", columns)
+            self.assertIn("cookie_token_encrypted", columns)
+            self.assertIn("login_ticket_encrypted", columns)
+            self.assertIn("last_token_refresh_at", columns)
+            self.assertIn("last_token_refresh_status", columns)
+            self.assertIn("last_token_refresh_message", columns)
+
+            await legacy_engine.dispose()
+        finally:
+            if os.path.exists(legacy_path):
+                os.remove(legacy_path)
 
     async def test_settings_default_database_url_points_to_local_mysql(self):
         original_database_url = os.environ.pop("DATABASE_URL", None)
