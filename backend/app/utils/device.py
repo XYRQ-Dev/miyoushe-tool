@@ -16,6 +16,7 @@ from app.config import settings
 
 
 HYPERION_APP_VERSION = "2.90.1"
+GENSHIN_AUTHKEY_APP_VERSION = "2.95.1"
 HYPERION_SIGN_SALT = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"
 DEVICE_FP_URL = "https://public-data-api.mihoyo.com/device-fp/api/getFp"
 
@@ -42,6 +43,17 @@ def build_hyperion_user_agent(app_version: str = HYPERION_APP_VERSION) -> str:
         "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/118.0.0.0 "
         f"Mobile Safari/537.36 miHoYoBBS/{app_version}"
     )
+
+
+def build_hoyolab_desktop_user_agent(app_version: str = GENSHIN_AUTHKEY_APP_VERSION) -> str:
+    """
+    对齐 HuTao 当前 XRpc 客户端的桌面 UA 形式。
+
+    `genAuthKey` 这条链路在 HuTao 侧走的并不是移动 WebView UA，而是更收敛的桌面
+    `miHoYoBBS/<version>` 头。这里单独抽 helper，而不是复用签到链路的移动端 UA，
+    是为了避免后续维护者“顺手统一 UA”后再次把已验证的 authkey 契约带偏。
+    """
+    return f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) miHoYoBBS/{app_version}"
 
 
 def build_hyperion_headers(
@@ -92,7 +104,8 @@ def build_genshin_authkey_headers(
     *,
     device_id: str,
     ds: str,
-    app_version: str = HYPERION_APP_VERSION,
+    device_fp: str | None = None,
+    app_version: str = GENSHIN_AUTHKEY_APP_VERSION,
 ) -> dict[str, str]:
     """
     构造原神 authkey（LK2）请求头。
@@ -100,9 +113,9 @@ def build_genshin_authkey_headers(
     这里必须强制带齐 DS、device_id 与 `Referer=https://app.mihoyo.com`。
     若误回退到“只带工作 Cookie 的旧 GET 习惯”，接口通常不会给出直观错误，排障会被噪音淹没。
     """
-    return {
+    headers = {
         "Accept": "application/json",
-        "User-Agent": build_hyperion_user_agent(app_version),
+        "User-Agent": build_hoyolab_desktop_user_agent(app_version),
         "Referer": "https://app.mihoyo.com",
         "x-rpc-app_version": app_version,
         "x-rpc-client_type": "5",
@@ -110,6 +123,9 @@ def build_genshin_authkey_headers(
         "DS": ds,
         "Cookie": cookie,
     }
+    if device_fp:
+        headers["x-rpc-device_fp"] = device_fp
+    return headers
 
 
 def build_device_fp_payload(device_id: str, device_fp: str) -> dict:

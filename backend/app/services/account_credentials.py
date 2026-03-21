@@ -108,6 +108,26 @@ class AccountCredentialService:
             mid=snapshot.mid,
         )
 
+    def build_stoken_cookie_for_authkey(self, account: MihoyoAccount) -> str:
+        """
+        构造原神 authkey 专用 Cookie。
+
+        `genAuthKey` 对 Cookie 形状比 Passport 根凭据接口更敏感。
+        HuTao 当前 `CookieType.SToken` 实际要求 `mid + stoken + stuid` 这组三件套；
+        如果这里偷懒只带 `stuid + stoken`，表面上已经不像旧工作 Cookie，那仍然会落在
+        “方法、DS、Referer 都对了，但上游继续 invalid request” 的尴尬半对齐状态。
+        """
+        snapshot = self.get_root_credential_snapshot(account)
+        if not snapshot.mid:
+            raise RootCredentialRefreshError(f"{ROOT_CREDENTIAL_REAUTH_MESSAGE}（缺少 mid）")
+        return "; ".join(
+            [
+                f"mid={snapshot.mid}",
+                f"stoken={snapshot.stoken}",
+                f"stuid={snapshot.stuid}",
+            ]
+        )
+
     def _build_stoken_cookie(
         self,
         account: MihoyoAccount,

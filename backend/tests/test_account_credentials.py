@@ -78,6 +78,18 @@ class AccountCredentialHelperUnitTests(unittest.TestCase):
         self.assertIn("stoken_v2=v2_test_stoken", cookie)
         self.assertIn("mid=mid-10001", cookie)
 
+    def test_build_stoken_cookie_for_authkey_keeps_minimal_stoken_shape(self):
+        from app.services.account_credentials import AccountCredentialService
+
+        service = AccountCredentialService(db=None)
+        account = self._build_account()
+
+        cookie = service.build_stoken_cookie_for_authkey(account)
+        self.assertEqual(cookie, "mid=mid-10001; stoken=v2_test_stoken; stuid=10001")
+        self.assertNotIn("stoken_v2=", cookie)
+        self.assertNotIn("ltuid=", cookie)
+        self.assertIn("mid=mid-10001", cookie)
+
     def test_get_root_credential_snapshot_raises_when_stoken_missing(self):
         from app.services.account_credentials import (
             ROOT_CREDENTIAL_REAUTH_MESSAGE,
@@ -118,6 +130,36 @@ class DsLk2ShapeTests(unittest.TestCase):
         self.assertRegex(parts[0], r"^\d+$")
         self.assertRegex(parts[1], r"^[a-z0-9]{6}$")
         self.assertRegex(parts[2], r"^[0-9a-f]{32}$")
+
+
+class GenshinAuthkeyHeaderTests(unittest.TestCase):
+    def test_build_genshin_authkey_headers_uses_hutao_aligned_version(self):
+        from app.utils.device import build_genshin_authkey_headers
+
+        headers = build_genshin_authkey_headers(
+            "stuid=10001; stoken=v2_test_stoken",
+            device_id="device-id-001",
+            ds="123456,abcdef,sign",
+        )
+
+        self.assertEqual(headers["Referer"], "https://app.mihoyo.com")
+        self.assertEqual(headers["x-rpc-app_version"], "2.95.1")
+        self.assertEqual(headers["x-rpc-device_id"], "device-id-001")
+        self.assertEqual(headers["DS"], "123456,abcdef,sign")
+        self.assertEqual(headers["User-Agent"], "Mozilla/5.0 (Windows NT 10.0; Win64; x64) miHoYoBBS/2.95.1")
+        self.assertNotIn("x-rpc-device_fp", headers)
+
+    def test_build_genshin_authkey_headers_includes_device_fp_when_provided(self):
+        from app.utils.device import build_genshin_authkey_headers
+
+        headers = build_genshin_authkey_headers(
+            "stuid=10001; stoken=v2_test_stoken",
+            device_id="device-id-001",
+            ds="123456,abcdef,sign",
+            device_fp="device-fp-001",
+        )
+
+        self.assertEqual(headers["x-rpc-device_fp"], "device-fp-001")
 
 
 class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
