@@ -44,6 +44,8 @@ from app.schemas.gacha import (
     GachaRoleOption,
     GachaSummaryResponse,
 )
+from app.services.gacha import GENSHIN_AUTHKEY_API_URL
+from app.utils.crypto import encrypt_text
 from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
@@ -74,7 +76,29 @@ class FakeAsyncClient:
 
     async def get(self, url, params=None, headers=None):
         index = len(self.calls)
-        self.calls.append({"url": url, "params": params, "headers": headers})
+        self.calls.append(
+            {
+                "method": "GET",
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "json": None,
+            }
+        )
+        payload = self._payloads[min(index, len(self._payloads) - 1)]
+        return FakeResponse(payload)
+
+    async def post(self, url, params=None, headers=None, json=None):
+        index = len(self.calls)
+        self.calls.append(
+            {
+                "method": "POST",
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "json": json,
+            }
+        )
         payload = self._payloads[min(index, len(self._payloads) - 1)]
         return FakeResponse(payload)
 
@@ -349,6 +373,20 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
             await session.commit()
             return user, account, roles
 
+    async def _seed_high_privilege_account_with_roles(self, role_specs=None):
+        # 新的 authkey 主链会先校验可解密的根凭据，再决定是否向上游发起 POST。
+        # 成功路径测试若仍沿用“裸账号”夹具，断言会提前死在凭据校验上，无法真正锁住协议是否对齐 HuTao 主链。
+        user, account, roles = await self._seed_account_with_roles(role_specs)
+        async with await self._new_session() as session:
+            managed = await session.get(MihoyoAccount, account.id)
+            managed.stoken_encrypted = encrypt_text("v2_test_stoken")
+            managed.stuid = "10001"
+            managed.mid = "mid-10001"
+            managed.credential_status = "valid"
+            await session.commit()
+            await session.refresh(managed)
+        return user, account, roles
+
     def _build_genshin_import_url(self, *, game_uid: str | None = None) -> str:
         return GachaContractTests()._build_genshin_import_url(game_uid=game_uid)
 
@@ -549,8 +587,8 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertEqual(context.exception.detail, "该账号未开通所选角色的抽卡记录能力")
 
-    async def test_import_from_account_uses_requested_game_uid_role(self):
-        user, account, _roles = await self._seed_account_with_roles(
+    async def test_import_from_account_posts_json_using_root_stoken_contract(self):
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
             [
                 {"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服", "region": "cn_gf01"},
                 {"game_biz": "hk4e_os", "game_uid": "10002", "nickname": "国际服", "region": "os_usa"},
@@ -598,15 +636,71 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                     GachaImportFromAccountRequest(
                         account_id=account.id,
                         game="genshin",
-                        game_uid="10002",
+                        game_uid="10001",
                     ),
                     current_user=user,
                     db=session,
                 )
 
         self.assertEqual(response.inserted_count, 1)
-        self.assertEqual(fake_client.calls[0]["params"]["game_uid"], "10002")
-        self.assertEqual(fake_client.calls[0]["params"]["game_biz"], "hk4e_os")
+        self.assertEqual(fake_client.calls[0]["method"], "POST")
+        self.assertEqual(fake_client.calls[0]["url"], GENSHIN_AUTHKEY_API_URL)
+        self.assertEqual(
+            fake_client.calls[0]["json"],
+            {
+                "auth_appid": "webview_gacha",
+                "game_biz": "hk4e_cn",
+                "game_uid": 10001,
+                "region": "cn_gf01",
+            },
+        )
+        self.assertIn("stoken=", fake_client.calls[0]["headers"]["Cookie"])
+        self.assertEqual(fake_client.calls[0]["headers"]["Referer"], "https://app.mihoyo.com")
+        self.assertIn("DS", fake_client.calls[0]["headers"])
+
+    async def test_import_from_account_requires_high_privilege_root_credentials(self):
+        # 这里故意只种普通账号，不补高权限根凭据。
+        # 维护者若把自动导入悄悄回退成“工作 Cookie 能用就继续试”，该测试会第一时间阻止这种协议降级。
+        user, account, _roles = await self._seed_account_with_roles(
+            [{"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服", "region": "cn_gf01"}]
+        )
+
+        async with await self._new_session() as session:
+            with self.assertRaises(HTTPException) as context:
+                await import_gacha_records_from_account(
+                    GachaImportFromAccountRequest(
+                        account_id=account.id,
+                        game="genshin",
+                        game_uid="10001",
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "高权限根凭据已失效，请重新扫码升级高权限登录")
+
+    async def test_import_from_account_rejects_oversea_role_for_genshin_authkey(self):
+        # HuTao 主链对国际服 `SToken -> authkey` 直接判不支持。
+        # 这里必须在本地前置拒绝，不能继续“先打上游再看返回值”，否则错误语义会重新变模糊。
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
+            [{"game_biz": "hk4e_os", "game_uid": "10002", "nickname": "国际服", "region": "os_usa"}]
+        )
+
+        async with await self._new_session() as session:
+            with self.assertRaises(HTTPException) as context:
+                await import_gacha_records_from_account(
+                    GachaImportFromAccountRequest(
+                        account_id=account.id,
+                        game="genshin",
+                        game_uid="10002",
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "当前仅支持原神国服账号自动导入")
 
     async def test_import_uigf_only_imports_requested_uid_and_rejects_missing_uid(self):
         user, account, _roles = await self._seed_account_with_roles(
