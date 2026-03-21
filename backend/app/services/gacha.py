@@ -25,9 +25,8 @@ from app.schemas.gacha import (
     GachaRoleOption,
     GachaSummaryResponse,
 )
-from app.services.account_credentials import AccountCredentialService
+from app.services.genshin_authkey import GenshinAuthkeyService
 from app.services.gacha_uigf import export_uigf_v42, parse_uigf
-from app.utils.crypto import decrypt_cookie
 from app.utils.timezone import utc_now_naive
 
 
@@ -56,14 +55,6 @@ SUPPORTED_GACHA_GAME_CONFIGS = {
         "supported_role_prefixes": ("hkrpg_",),
     },
 }
-
-GENSHIN_AUTHKEY_API_URL = "https://api-takumi.mihoyo.com/binding/api/genAuthKey"
-GENSHIN_GACHA_LOG_API_URL = "https://public-operation-hk4e.mihoyo.com/gacha_info/api/getGachaLog"
-GENSHIN_REGION_BY_GAME_BIZ = {
-    "hk4e_cn": "cn_gf01",
-    "hk4e_os": "os_usa",
-}
-
 
 @dataclass
 class ParsedImportSource:
@@ -644,87 +635,7 @@ class GachaService:
         if role is None or not role.game_uid:
             raise HTTPException(status_code=400, detail="该账号缺少可用的原神角色，无法自动导入")
 
-        region = (role.region or GENSHIN_REGION_BY_GAME_BIZ.get(role.game_biz) or "").strip()
-        if not region:
-            raise HTTPException(status_code=400, detail="该原神角色缺少区域信息，无法自动导入")
-
-        ensure_result = await AccountCredentialService(self.db).ensure_work_cookie(account)
-        if ensure_result.get("state") != "valid":
-            detail = str(ensure_result.get("message") or "账号工作 Cookie 不可用")
-            raise HTTPException(status_code=400, detail=detail)
-
-        work_cookie = str(ensure_result.get("cookie") or "").strip()
-        if not work_cookie and account.cookie_encrypted:
-            try:
-                work_cookie = decrypt_cookie(account.cookie_encrypted)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail="账号工作 Cookie 无法解密，无法自动导入") from exc
-        if not work_cookie:
-            raise HTTPException(status_code=400, detail="账号工作 Cookie 不可用")
-
-        params = {
-            "auth_appid": "webview_gacha",
-            "game_biz": role.game_biz,
-            "game_uid": str(role.game_uid),
-            "region": region,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(
-                    GENSHIN_AUTHKEY_API_URL,
-                    params=params,
-                    headers={
-                        "Accept": "application/json",
-                        "Cookie": work_cookie,
-                    },
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=400, detail=f"原神 authkey 生成失败：上游接口返回异常状态 {exc.response.status_code}") from exc
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：无法连接上游接口") from exc
-
-        try:
-            payload = response.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了无法解析的响应") from exc
-
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了不符合预期的响应结构")
-
-        if payload.get("retcode") != 0:
-            message = payload.get("message") or payload.get("msg") or "上游返回失败"
-            raise HTTPException(status_code=400, detail=f"原神 authkey 生成失败：{message}")
-
-        data_payload = payload.get("data") or {}
-        if not isinstance(data_payload, dict):
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了不符合预期的响应结构")
-
-        authkey = str(data_payload.get("authkey") or "").strip()
-        authkey_ver = str(data_payload.get("authkey_ver") or "").strip()
-        sign_type = str(data_payload.get("sign_type") or "").strip()
-        if not authkey or not authkey_ver or not sign_type:
-            raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游未返回完整票据")
-
-        return self._build_genshin_import_url_from_authkey(
-            authkey=authkey,
-            authkey_ver=authkey_ver,
-            sign_type=sign_type,
-        )
-
-    def _build_genshin_import_url_from_authkey(self, *, authkey: str, authkey_ver: str, sign_type: str) -> str:
-        # `authkey` 与完整抽卡 URL 都属于可直接重放抽卡接口的高敏感票据。
-        # 这里故意只在内存里瞬时组装，随后立刻交给现有 URL 导入链路；真正落库的仍只有脱敏后的 `source_url_masked`。
-        # 如果未来有人把完整 URL 顺手写进日志、任务表或异常上报，等价于把账号抽卡查询能力暴露给日志系统。
-        params = {
-            "authkey": authkey,
-            "authkey_ver": authkey_ver,
-            "sign_type": sign_type,
-            "lang": "zh-cn",
-            "gacha_type": "301",
-        }
-        return f"{GENSHIN_GACHA_LOG_API_URL}?{urlencode(params)}"
+        return await GenshinAuthkeyService(self.db).generate_import_url(account, role)
 
 
 gacha_service_type = GachaService

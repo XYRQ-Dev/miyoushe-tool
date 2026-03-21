@@ -44,7 +44,7 @@ from app.schemas.gacha import (
     GachaRoleOption,
     GachaSummaryResponse,
 )
-from app.services.gacha import GENSHIN_AUTHKEY_API_URL
+from app.services.genshin_authkey import GENSHIN_AUTHKEY_API_URL
 from app.utils.crypto import encrypt_cookie, encrypt_text
 from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
@@ -594,7 +594,7 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                 {"game_biz": "hk4e_os", "game_uid": "10002", "nickname": "国际服", "region": "os_usa"},
             ]
         )
-        fake_client = FakeAsyncClient(
+        authkey_client = FakeAsyncClient(
             [
                 {
                     "retcode": 0,
@@ -604,7 +604,11 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                         "authkey_ver": 1,
                         "sign_type": 2,
                     },
-                },
+                }
+            ]
+        )
+        gacha_client = FakeAsyncClient(
+            [
                 {
                     "retcode": 0,
                     "message": "OK",
@@ -620,17 +624,16 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                             }
                         ]
                     },
-                },
+                }
             ]
         )
 
         async with await self._new_session() as session:
             with (
-                patch(
-                    "app.services.gacha.AccountCredentialService.ensure_work_cookie",
-                    new=AsyncMock(return_value={"state": "valid", "message": "ok", "cookie": "ltoken_v2=test"}),
-                ),
-                patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+                patch("app.services.genshin_authkey.generate_device_id", return_value="device-id-001"),
+                patch("app.services.genshin_authkey.generate_cn_gen1_ds_lk2", return_value="123456,abcdef,sign"),
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=authkey_client),
+                patch("app.services.gacha.httpx.AsyncClient", return_value=gacha_client),
             ):
                 response = await import_gacha_records_from_account(
                     GachaImportFromAccountRequest(
@@ -643,10 +646,10 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(response.inserted_count, 1)
-        self.assertEqual(fake_client.calls[0]["method"], "POST")
-        self.assertEqual(fake_client.calls[0]["url"], GENSHIN_AUTHKEY_API_URL)
+        self.assertEqual(authkey_client.calls[0]["method"], "POST")
+        self.assertEqual(authkey_client.calls[0]["url"], GENSHIN_AUTHKEY_API_URL)
         self.assertEqual(
-            fake_client.calls[0]["json"],
+            authkey_client.calls[0]["json"],
             {
                 "auth_appid": "webview_gacha",
                 "game_biz": "hk4e_cn",
@@ -654,9 +657,65 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
                 "region": "cn_gf01",
             },
         )
-        self.assertIn("stoken=", fake_client.calls[0]["headers"]["Cookie"])
-        self.assertEqual(fake_client.calls[0]["headers"]["Referer"], "https://app.mihoyo.com")
-        self.assertIn("DS", fake_client.calls[0]["headers"])
+        self.assertIn("stoken=", authkey_client.calls[0]["headers"]["Cookie"])
+        self.assertEqual(authkey_client.calls[0]["headers"]["Referer"], "https://app.mihoyo.com")
+        self.assertEqual(authkey_client.calls[0]["headers"]["x-rpc-device_id"], "device-id-001")
+        self.assertEqual(authkey_client.calls[0]["headers"]["DS"], "123456,abcdef,sign")
+        self.assertEqual(gacha_client.calls[0]["method"], "GET")
+        self.assertEqual(gacha_client.calls[0]["params"]["authkey"], "generated-authkey")
+
+    async def test_import_from_account_falls_back_region_only_for_hk4e_cn_role(self):
+        user, account, _roles = await self._seed_high_privilege_account_with_roles(
+            [{"game_biz": "hk4e_cn", "game_uid": "10001", "nickname": "国服缺区服", "region": None}]
+        )
+        authkey_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {
+                        "authkey": "generated-authkey",
+                        "authkey_ver": 1,
+                        "sign_type": 2,
+                    },
+                }
+            ]
+        )
+        gacha_client = FakeAsyncClient(
+            [
+                {
+                    "retcode": 0,
+                    "message": "OK",
+                    "data": {"list": []},
+                }
+            ]
+        )
+
+        async with await self._new_session() as session:
+            with (
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=authkey_client),
+                patch("app.services.gacha.httpx.AsyncClient", return_value=gacha_client),
+            ):
+                response = await import_gacha_records_from_account(
+                    GachaImportFromAccountRequest(
+                        account_id=account.id,
+                        game="genshin",
+                        game_uid="10001",
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+        self.assertEqual(response.inserted_count, 0)
+        self.assertEqual(
+            authkey_client.calls[0]["json"],
+            {
+                "auth_appid": "webview_gacha",
+                "game_biz": "hk4e_cn",
+                "game_uid": 10001,
+                "region": "cn_gf01",
+            },
+        )
 
     async def test_import_from_account_requires_high_privilege_root_credentials(self):
         # 这里故意只给一个“看起来还能用”的工作 Cookie，却不给可解密的高权限根凭据。
@@ -707,11 +766,7 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
 
         async with await self._new_session() as session:
             with (
-                patch(
-                    "app.services.gacha.AccountCredentialService.ensure_work_cookie",
-                    new=AsyncMock(return_value={"state": "valid", "message": "ok", "cookie": "ltoken_v2=test"}),
-                ),
-                patch("app.services.gacha.httpx.AsyncClient", return_value=fake_client),
+                patch("app.services.genshin_authkey.httpx.AsyncClient", return_value=fake_client),
             ):
                 with self.assertRaises(HTTPException) as context:
                     await import_gacha_records_from_account(
