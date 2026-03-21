@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
     # 这里只在配置层暴露测试库变量名，方便部署文档、排障日志和 IDE 自动补全看到它。
+    # 该变量只服务 MySQL-only 测试基座；不要再把它理解成“任何临时数据库都能塞进去”的兜底入口。
     # 统一测试基座不能直接读取 `settings.TEST_DATABASE_URL`，因为 `settings` 会在 import 时缓存环境快照；
     # 而单测需要在同一进程里反复 patch 环境变量验证“缺失/非法必须失败”，因此测试代码必须直接读 `os.environ`。
     TEST_DATABASE_URL: str = ""

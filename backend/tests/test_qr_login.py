@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
 playwright_module = types.ModuleType("playwright")
 playwright_async_api = types.ModuleType("playwright.async_api")

@@ -2,35 +2,19 @@ import os
 import unittest
 from datetime import timedelta
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.models.account import GameRole, MihoyoAccount
 from app.models.task_log import TaskLog
 from app.models.user import User
 from app.utils.crypto import encrypt_cookie
 from app.utils.timezone import utc_now_naive
+from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
-class HealthCenterTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        self.session_factory = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    async def asyncTearDown(self):
-        await self.engine.dispose()
-
-    async def _new_session(self):
-        return self.session_factory()
+class HealthCenterTests(MySqlIsolatedAsyncioTestCase):
 
     async def _create_user(self, session: AsyncSession, username: str) -> User:
         user = User(username=username, password_hash="x", role="user", is_active=True)

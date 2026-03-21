@@ -2,15 +2,14 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.models.account import MihoyoAccount
 from app.services.login_state import LoginStateService
 from app.utils.crypto import decrypt_cookie, decrypt_text, encrypt_cookie, encrypt_text
+from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
 class _FakeResponse:
@@ -42,22 +41,7 @@ class _FakeAsyncClient:
         return _FakeResponse(self._responses.pop(0))
 
 
-class AccountCredentialTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        self.session_factory = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    async def asyncTearDown(self):
-        await self.engine.dispose()
-
-    async def _new_session(self):
-        return self.session_factory()
+class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_persist_login_result_fetches_root_tokens_and_rebuilds_cookie(self):
         from app.services.account_credentials import AccountCredentialService

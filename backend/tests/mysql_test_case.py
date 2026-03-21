@@ -51,6 +51,11 @@ class MySqlIsolatedAsyncioTestCase(unittest.IsolatedAsyncioTestCase):
         if self.engine is not None:
             await self.engine.dispose()
 
+    async def _new_session(self):
+        if self.session_factory is None:
+            raise RuntimeError("测试会话工厂尚未初始化，请先执行 asyncSetUp")
+        return self.session_factory()
+
     async def _reset_schema(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

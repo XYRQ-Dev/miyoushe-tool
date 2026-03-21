@@ -55,8 +55,6 @@ class SystemSettingsService:
         return any(
             token in message
             for token in (
-                "no such table",
-                "no such column",
                 "unknown column",
                 "doesn't exist",
             )
@@ -79,10 +77,10 @@ class SystemSettingsService:
 
     async def ensure_table_exists(self) -> None:
         """
-        为旧部署补建 system_settings 表。
+        为旧部署补建 `system_settings` 表。
 
-        本项目历史上没有迁移工具，线上很多实例是直接在旧 SQLite 库上升级代码。
-        如果这里只依赖应用启动时的 `create_all()`，一旦进程未完全重启或旧库未补表，
+        本项目历史上存在“先升级代码、后补数据库结构”的部署方式。
+        如果这里只依赖应用启动时的 `create_all()`，一旦旧实例没有补上这张表，
         首次访问签到接口就会直接 500。这里按需补建，确保接口层对旧库具备自愈能力。
         """
         async with self.db.bind.begin() as conn:
@@ -97,8 +95,6 @@ class SystemSettingsService:
         都会因为 ORM 映射里带着新列而直接报错，导致管理员配置页和登录态恢复一起失效。
         """
         async with self.db.bind.begin() as conn:
-            dialect_name = conn.dialect.name
-
             def _load_columns(sync_conn):
                 inspector = inspect(sync_conn)
                 if not inspector.has_table(SystemSetting.__tablename__):
@@ -111,9 +107,8 @@ class SystemSettingsService:
                 return
 
             if "menu_visibility_json" not in existing_columns:
-                column_type = "TEXT" if dialect_name == "sqlite" else "LONGTEXT"
                 await conn.exec_driver_sql(
-                    f"ALTER TABLE {SystemSetting.__tablename__} ADD COLUMN menu_visibility_json {column_type}"
+                    f"ALTER TABLE {SystemSetting.__tablename__} ADD COLUMN menu_visibility_json LONGTEXT"
                 )
 
     def _build_default_config(self) -> SystemSetting:

@@ -23,6 +23,21 @@ sys.modules.setdefault("playwright.async_api", playwright_async_api)
 
 
 class MainModuleImportTests(unittest.TestCase):
+    def test_database_module_no_longer_exposes_sqlite_compat_helpers(self):
+        database_module = import_module("app.database")
+
+        # Task 1 已经把运行时冻结为 MySQL-only，这里继续锁定导出面也必须一起收口。
+        # 如果只删调用、不删符号，后续很容易又有人把旧补列逻辑从别处接回来，
+        # 让“运行时修 SQLite 结构”这种已废弃路径借尸还魂。
+        self.assertFalse(hasattr(database_module, "ensure_account_columns"))
+        self.assertFalse(hasattr(database_module, "ensure_redeem_columns"))
+
+    def test_sqlite_migration_module_is_no_longer_importable(self):
+        # 迁移脚本与迁移模块一起下线，避免仓库继续暗示“SQLite 仍是受支持的升级路径”。
+        # 这里只测 import 失败而不是测文件是否存在，是为了从调用者视角锁定真实公开行为。
+        with self.assertRaises(ModuleNotFoundError):
+            import_module("app.migrations.sqlite_to_mysql")
+
     def test_normalize_database_url_rejects_sqlite(self):
         from app.database import normalize_database_url
 
