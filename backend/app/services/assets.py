@@ -3,7 +3,7 @@
 
 该服务只负责把现有账号、角色、签到、抽卡能力聚合为稳定的只读视图：
 1. 不新增数据库表，避免把“页面展示状态”做成第二套真相源
-2. 抽卡和兑换目前仍是账号 + 游戏维度，因此角色卡只携带入口上下文，不伪造角色级业务语义
+2. 抽卡归档已经收敛到账号 + 游戏 + 角色 UID 维度，因此角色卡必须按真实 UID 展示是否已归档
 3. 页面聚合结果只保留当前仍在线的能力，已下线功能不得继续混入响应协议
 """
 
@@ -113,16 +113,20 @@ class RoleAssetService:
             latest_logs_by_role[log.game_role_id] = log
         return latest_logs_by_role
 
-    async def _load_gacha_archive_pairs(self, account_ids: list[int]) -> set[tuple[int, str]]:
+    async def _load_gacha_archive_pairs(self, account_ids: list[int]) -> set[tuple[int, str, str]]:
         if not account_ids:
             return set()
 
         rows = await self.db.execute(
-            select(GachaRecord.account_id, GachaRecord.game)
+            select(GachaRecord.account_id, GachaRecord.game, GachaRecord.game_uid)
             .where(GachaRecord.account_id.in_(account_ids))
-            .group_by(GachaRecord.account_id, GachaRecord.game)
+            .group_by(GachaRecord.account_id, GachaRecord.game, GachaRecord.game_uid)
         )
-        return {(account_id, game) for account_id, game in rows.all()}
+        return {
+            (account_id, game, str(game_uid))
+            for account_id, game, game_uid in rows.all()
+            if game_uid
+        }
 
     def _build_account_response(
         self,
@@ -156,7 +160,7 @@ class RoleAssetService:
         account: MihoyoAccount,
         role: GameRole,
         latest_log: TaskLog | None,
-        gacha_archive_pairs: set[tuple[int, str]],
+        gacha_archive_pairs: set[tuple[int, str, str]],
     ) -> RoleAssetRoleResponse:
         game, game_name = self._resolve_game(role)
         return RoleAssetRoleResponse(
@@ -170,7 +174,10 @@ class RoleAssetService:
             level=role.level,
             is_enabled=role.is_enabled,
             supported_assets=self._collect_supported_assets(role),
-            has_gacha_archive=(account.id, game) in gacha_archive_pairs,
+            # 这里必须按角色 UID 命中抽卡归档，而不是继续复用账号 + 游戏粒度。
+            # 同一账号下多个同游戏角色时，如果任意一个 UID 有记录就把全部角色都标成已归档，
+            # 前端会误导用户，以为当前选中的角色已经具备历史数据，后续导出/重置又会和界面状态完全对不上。
+            has_gacha_archive=(account.id, game, str(role.game_uid or "")) in gacha_archive_pairs,
             recent_checkin=RoleAssetCheckinSummaryResponse(
                 last_status=latest_log.status if latest_log else None,
                 last_message=latest_log.message if latest_log else None,

@@ -2,32 +2,34 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+if os.environ.get("TEST_DATABASE_URL"):
+    os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+else:
+    os.environ.setdefault(
+        "DATABASE_URL",
+        "mysql+asyncmy://root:root@127.0.0.1:3306/miyoushe_test?charset=utf8mb4",
+    )
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
-from app.database import Base
 from app.models.account import GameRole, MihoyoAccount
 from app.models.gacha import GachaRecord
 from app.models.task_log import TaskLog
 from app.models.user import User
 from app.utils.crypto import encrypt_cookie, encrypt_text
+from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
-class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
+class RoleAssetOverviewTests(MySqlIsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        self.session_factory = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
+        await super().asyncSetUp()
         async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(self._drop_and_create_all)
 
-    async def asyncTearDown(self):
-        await self.engine.dispose()
+    @staticmethod
+    def _drop_and_create_all(sync_conn) -> None:
+        from app.database import Base
+
+        Base.metadata.drop_all(sync_conn)
+        Base.metadata.create_all(sync_conn)
 
     async def _new_session(self):
         return self.session_factory()
@@ -173,6 +175,15 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
                 level=70,
                 is_enabled=True,
             )
+            stable_genshin_alt = GameRole(
+                account_id=stable_account.id,
+                game_biz="hk4e_cn",
+                game_uid="30005",
+                nickname="旅行者小号",
+                region="cn_gf01",
+                level=58,
+                is_enabled=True,
+            )
             reauth_starrail = GameRole(
                 account_id=reauth_account.id,
                 game_biz="hkrpg_cn",
@@ -200,7 +211,9 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
                 level=90,
                 is_enabled=True,
             )
-            session.add_all([stable_genshin, stable_starrail, reauth_starrail, unsupported_role, foreign_role])
+            session.add_all(
+                [stable_genshin, stable_starrail, stable_genshin_alt, reauth_starrail, unsupported_role, foreign_role]
+            )
             await session.flush()
 
             session.add_all([
@@ -228,6 +241,7 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
                 GachaRecord(
                     account_id=stable_account.id,
                     game="genshin",
+                    game_uid="30001",
                     record_id="5000001",
                     pool_type="301",
                     pool_name="角色活动祈愿",
@@ -239,6 +253,7 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
                 GachaRecord(
                     account_id=foreign_account.id,
                     game="genshin",
+                    game_uid="40001",
                     record_id="9000001",
                     pool_type="301",
                     pool_name="角色活动祈愿",
@@ -254,7 +269,7 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
             response = await get_role_asset_overview(current_user=user, db=session)
 
         self.assertEqual(response.summary.total_accounts, 2)
-        self.assertEqual(response.summary.total_roles, 4)
+        self.assertEqual(response.summary.total_roles, 5)
         self.assertEqual(response.summary.gacha_archived_games, 1)
 
         # 这里显式给账号灌入新的高权限根凭据字段，目的是锁定一个兼容约束：
@@ -274,6 +289,9 @@ class RoleAssetOverviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stable_role_map[stable_genshin.id].supported_assets, ["checkin", "gacha", "redeem"])
         self.assertTrue(stable_role_map[stable_genshin.id].has_gacha_archive)
         self.assertEqual(stable_role_map[stable_genshin.id].recent_checkin.last_status, "success")
+        # 同账号同游戏的另一个 UID 没有任何归档记录时，角色卡必须保持未归档。
+        # 否则前端会把账号级导入误展示成“该游戏全部角色都已归档”，用户选错 UID 后还以为数据已经完整。
+        self.assertFalse(stable_role_map[stable_genshin_alt.id].has_gacha_archive)
 
         self.assertEqual(stable_role_map[stable_starrail.id].game, "starrail")
         self.assertFalse(stable_role_map[stable_starrail.id].has_gacha_archive)

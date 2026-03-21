@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.account import MihoyoAccount, GameRole
+from app.models.account import GameRole, MihoyoAccount
 from app.models.gacha import GachaImportJob, GachaRecord
 from app.schemas.gacha import (
     GachaAccountListResponse,
@@ -22,6 +22,7 @@ from app.schemas.gacha import (
     GachaPoolSummary,
     GachaRecordListResponse,
     GachaResetResponse,
+    GachaRoleOption,
     GachaSummaryResponse,
 )
 from app.services.account_credentials import AccountCredentialService
@@ -81,6 +82,12 @@ class GachaService:
             raise HTTPException(status_code=400, detail=detail)
         return config
 
+    def _normalize_game_uid(self, game_uid: str, *, detail: str = "缺少 game_uid，无法定位目标角色") -> str:
+        normalized = str(game_uid or "").strip()
+        if not normalized:
+            raise HTTPException(status_code=400, detail=detail)
+        return normalized
+
     def _raise_upstream_import_error(self, message: str) -> None:
         # 抽卡 URL 导入依赖外部接口与网络环境，网络抖动、代理篡改、上游异常格式都属于高频外部失败。
         # 这些情况若直接冒泡成 500，用户和维护者都会被误导成“服务端代码炸了”，实际排障方向会完全跑偏。
@@ -99,27 +106,30 @@ class GachaService:
             raise HTTPException(status_code=404, detail="账号不存在")
         return account
 
-    async def get_owned_account_for_game(self, account_id: int, user_id: int, game: str) -> MihoyoAccount:
+    async def get_owned_account_for_game(
+        self,
+        account_id: int,
+        user_id: int,
+        game: str,
+        game_uid: str,
+    ) -> MihoyoAccount:
         config = self._ensure_supported_game(game)
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         account = await self.get_owned_account(account_id, user_id)
 
         prefixes = config["supported_role_prefixes"]
-        # `list_supported_accounts()` 会把账号-游戏能力展示给前端，但这不能只是“界面提示”。
-        # 如果读写接口不复用同一套能力判定，前端看到“不支持”的账号仍可被手工请求写入另一款游戏数据，
-        # 最终会把不同游戏的记录混进同一账号，破坏后续导出、统计与排障边界。
-        # 因此这里强制把“展示出来的 supported_games”和“后端实际允许读写的权限”绑定为同一事实来源。
+        # 读写接口现在必须把“所选角色是否真实存在”当成权限校验的一部分，而不是只校验账号拥有该游戏任意角色。
+        # 否则同账号下两个 UID 并存时，用户即使选中了 A 角色，也可能被后端默默写到 B 角色名下，
+        # 这会让导入、导出、重置和资产总览全部出现“看起来成功、实际串 UID”的高隐蔽回归。
         role_result = await self.db.execute(
             select(GameRole.id).where(
                 GameRole.account_id == account_id,
+                GameRole.game_uid == normalized_game_uid,
                 or_(*(GameRole.game_biz.startswith(prefix) for prefix in prefixes)),
             ).limit(1)
         )
-        # 这里的业务问题是“账号是否至少拥有一个该游戏角色”，不是“是否只拥有唯一角色”。
-        # 同一米游社账号下出现多个同游戏角色是平台的正常数据形态；如果改回 `scalar_one_or_none()` 这类唯一性读取，
-        # 能力校验会把合法账号误判成 500，前端侧所有依赖该校验的读写接口都会一起被打断，排障时也会被误导到数据库重复数据方向。
-        # 因此查询只保留存在性语义，并显式 `limit(1)`，避免未来维护时把“权限判断”和“唯一约束”再次混为一谈。
         if role_result.first() is None:
-            raise HTTPException(status_code=400, detail="该账号未开通所选游戏的抽卡记录能力")
+            raise HTTPException(status_code=400, detail="该账号未开通所选角色的抽卡记录能力")
 
         return account
 
@@ -132,15 +142,28 @@ class GachaService:
         response_items: list[GachaAccountOption] = []
         for account in accounts:
             roles_result = await self.db.execute(
-                select(GameRole.game_biz).where(GameRole.account_id == account.id)
+                select(GameRole).where(GameRole.account_id == account.id).order_by(GameRole.id.asc())
             )
-            game_biz_list = [row[0] for row in roles_result.all()]
+            roles = roles_result.scalars().all()
 
             supported_games: list[str] = []
+            gacha_roles: list[GachaRoleOption] = []
             for game, config in SUPPORTED_GACHA_GAME_CONFIGS.items():
                 prefixes = config["supported_role_prefixes"]
-                if any(game_biz.startswith(prefixes) for game_biz in game_biz_list):
-                    supported_games.append(game)
+                matching_roles = [role for role in roles if role.game_biz.startswith(prefixes) and role.game_uid]
+                if not matching_roles:
+                    continue
+
+                supported_games.append(game)
+                gacha_roles.extend(
+                    GachaRoleOption(
+                        game=game,
+                        game_uid=str(role.game_uid),
+                        nickname=role.nickname,
+                        region=role.region,
+                    )
+                    for role in matching_roles
+                )
 
             if not supported_games:
                 continue
@@ -151,15 +174,24 @@ class GachaService:
                     nickname=account.nickname,
                     mihoyo_uid=account.mihoyo_uid,
                     supported_games=supported_games,
+                    gacha_roles=gacha_roles,
                 )
             )
 
         return GachaAccountListResponse(accounts=response_items, total=len(response_items))
 
-    async def import_records(self, *, account: MihoyoAccount, game: str, import_url: str) -> GachaImportResponse:
+    async def import_records(
+        self,
+        *,
+        account: MihoyoAccount,
+        game: str,
+        game_uid: str,
+        import_url: str,
+    ) -> GachaImportResponse:
         config = self._ensure_supported_game(game, detail="暂不支持该游戏的抽卡记录导入")
+        normalized_game_uid = self._normalize_game_uid(game_uid)
+        parsed = self._parse_import_url(game, normalized_game_uid, import_url)
 
-        parsed = self._parse_import_url(game, import_url)
         fetched_count = 0
         inserted_count = 0
         duplicate_count = 0
@@ -169,7 +201,6 @@ class GachaService:
         async with httpx.AsyncClient(
             timeout=30.0,
             headers={
-                # 抽卡记录接口对浏览器来源相对宽松，但统一的 UA 能减少被某些边缘代理拦截成异常客户端。
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             },
@@ -185,7 +216,7 @@ class GachaService:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
                     self._raise_upstream_import_error(f"上游接口返回异常状态 {exc.response.status_code}")
-                except httpx.HTTPError as exc:
+                except httpx.HTTPError:
                     self._raise_upstream_import_error("无法连接上游接口")
 
                 try:
@@ -214,6 +245,7 @@ class GachaService:
                 page_inserted, page_duplicates = await self._save_page_records(
                     account_id=account.id,
                     game=game,
+                    game_uid=normalized_game_uid,
                     items=items,
                     pool_name_map=config["pool_names"],
                 )
@@ -237,6 +269,7 @@ class GachaService:
         job = GachaImportJob(
             account_id=account.id,
             game=game,
+            game_uid=normalized_game_uid,
             source_url_masked=parsed.masked_url,
             status="success",
             fetched_count=fetched_count,
@@ -252,6 +285,7 @@ class GachaService:
             import_id=job.id,
             account_id=account.id,
             game=game,
+            game_uid=normalized_game_uid,
             fetched_count=fetched_count,
             inserted_count=inserted_count,
             duplicate_count=duplicate_count,
@@ -259,18 +293,21 @@ class GachaService:
             message="抽卡记录导入完成",
         )
 
-    async def import_records_from_account(self, *, account: MihoyoAccount, game: str) -> GachaImportResponse:
+    async def import_records_from_account(
+        self,
+        *,
+        account: MihoyoAccount,
+        game: str,
+        game_uid: str,
+    ) -> GachaImportResponse:
         if game != "genshin":
-            # 本任务只补原神的 `SToken -> authkey -> 导入` 主链路。
-            # 星铁虽然也支持手贴 URL / UIGF，但它的自动票据链、接口参数和风险面并不与原神完全一致；
-            # 若在这次需求里顺手复用，会把“已验证的原神链路”与“未完成验证的星铁票据链”混在同一入口里。
             raise HTTPException(status_code=400, detail="当前仅支持原神账号自动导入")
 
-        import_url = await self._generate_genshin_authkey(account)
+        import_url = await self._generate_genshin_authkey(account, game_uid)
         # 账号直连导入刻意只负责把账号态换成一条临时抽卡 URL，然后直接复用既有 URL 导入逻辑。
         # 原因是分页抓取、去重、落库、导入历史已经在 `import_records()` 中被现网路径验证过；
         # 如果这里再复制一套分页实现，后续任何字段修复或去重规则调整都要双份维护，极易出现两条导入链路语义漂移。
-        return await self.import_records(account=account, game=game, import_url=import_url)
+        return await self.import_records(account=account, game=game, game_uid=game_uid, import_url=import_url)
 
     async def import_records_from_uigf(
         self,
@@ -280,6 +317,7 @@ class GachaService:
         request: GachaImportUIGFRequest,
     ) -> GachaImportResponse:
         self._ensure_supported_game(game, detail="暂不支持该游戏的抽卡记录导入")
+        normalized_game_uid = self._normalize_game_uid(request.game_uid)
 
         try:
             parsed_uigf = parse_uigf(request.uigf_json)
@@ -290,9 +328,6 @@ class GachaService:
         if not game_records_by_uid:
             raise HTTPException(status_code=400, detail="UIGF 文件中不包含所选游戏记录")
 
-        # 现有表结构没有 `game_uid` 维度，这里只能把同账号同游戏的多个 UID 记录继续压平成一份导入批次。
-        # 这是刻意保持当前主线兼容：导入、汇总、去重全部仍围绕旧表工作，避免协议替换顺手引入数据迁移。
-        # 如果未来要按角色 UID 精确隔离导入历史，必须新增字段和迁移，而不是在这里悄悄改变统计口径。
         items = [
             {
                 "id": record.record_id,
@@ -302,15 +337,15 @@ class GachaService:
                 "rank_type": record.rank_type,
                 "time": record.time_text,
             }
-            for records in game_records_by_uid.values()
-            for record in records
+            for record in game_records_by_uid.get(normalized_game_uid, [])
         ]
         if not items:
-            raise HTTPException(status_code=400, detail="UIGF 文件中没有可导入的记录")
+            raise HTTPException(status_code=400, detail="UIGF 文件中不包含所选 UID 的记录")
 
         inserted_count, duplicate_count = await self._save_page_records(
             account_id=account.id,
             game=game,
+            game_uid=normalized_game_uid,
             items=items,
             pool_name_map=SUPPORTED_GACHA_GAME_CONFIGS[game]["pool_names"],
         )
@@ -320,6 +355,7 @@ class GachaService:
         job = GachaImportJob(
             account_id=account.id,
             game=game,
+            game_uid=normalized_game_uid,
             source_url_masked=f"uigf://{source_name}",
             status="success",
             fetched_count=len(items),
@@ -335,6 +371,7 @@ class GachaService:
             import_id=job.id,
             account_id=account.id,
             game=game,
+            game_uid=normalized_game_uid,
             fetched_count=len(items),
             inserted_count=inserted_count,
             duplicate_count=duplicate_count,
@@ -347,15 +384,18 @@ class GachaService:
         *,
         account_id: int,
         game: str,
+        game_uid: str,
         items: list[dict[str, Any]],
         pool_name_map: dict[str, str],
     ) -> tuple[int, int]:
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         record_ids = [str(item.get("id") or "").strip() for item in items if item.get("id")]
         existing_result = await self.db.execute(
             select(GachaRecord.record_id).where(
                 and_(
                     GachaRecord.account_id == account_id,
                     GachaRecord.game == game,
+                    GachaRecord.game_uid == normalized_game_uid,
                     GachaRecord.record_id.in_(record_ids),
                 )
             )
@@ -377,6 +417,7 @@ class GachaService:
                 GachaRecord(
                     account_id=account_id,
                     game=game,
+                    game_uid=normalized_game_uid,
                     record_id=record_id,
                     pool_type=pool_type,
                     pool_name=str(item.get("pool_name") or pool_name_map.get(pool_type, pool_type)),
@@ -387,19 +428,24 @@ class GachaService:
                 )
             )
             inserted_count += 1
-
-            # 记录新增的 record_id，防止同一次导入中后续条目重复触发唯一索引并为重复条目累加统计。
             existing_ids.add(record_id)
 
         await self.db.flush()
         return inserted_count, duplicate_count
 
-    async def get_summary(self, *, account_id: int, game: str) -> GachaSummaryResponse:
+    async def get_summary(self, *, account_id: int, game: str, game_uid: str) -> GachaSummaryResponse:
         self._ensure_supported_game(game)
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         result = await self.db.execute(
-            select(GachaRecord).where(
-                and_(GachaRecord.account_id == account_id, GachaRecord.game == game)
-            ).order_by(GachaRecord.time_text.desc(), GachaRecord.record_id.desc())
+            select(GachaRecord)
+            .where(
+                and_(
+                    GachaRecord.account_id == account_id,
+                    GachaRecord.game == game,
+                    GachaRecord.game_uid == normalized_game_uid,
+                )
+            )
+            .order_by(GachaRecord.time_text.desc(), GachaRecord.record_id.desc())
         )
         records = result.scalars().all()
 
@@ -420,6 +466,9 @@ class GachaService:
 
         latest_five = five_star[0] if five_star else None
         return GachaSummaryResponse(
+            account_id=account_id,
+            game=game,
+            game_uid=normalized_game_uid,
             total_count=len(records),
             five_star_count=len(five_star),
             four_star_count=four_star_count,
@@ -433,12 +482,18 @@ class GachaService:
         *,
         account_id: int,
         game: str,
+        game_uid: str,
         pool_type: str | None,
         page: int,
         page_size: int,
     ) -> GachaRecordListResponse:
         self._ensure_supported_game(game)
-        conditions = [GachaRecord.account_id == account_id, GachaRecord.game == game]
+        normalized_game_uid = self._normalize_game_uid(game_uid)
+        conditions = [
+            GachaRecord.account_id == account_id,
+            GachaRecord.game == game,
+            GachaRecord.game_uid == normalized_game_uid,
+        ]
         if pool_type:
             conditions.append(GachaRecord.pool_type == pool_type)
 
@@ -456,36 +511,34 @@ class GachaService:
             .limit(page_size)
         )
         records = result.scalars().all()
-        return GachaRecordListResponse(records=records, total=total)
+        return GachaRecordListResponse(
+            account_id=account_id,
+            game=game,
+            game_uid=normalized_game_uid,
+            records=records,
+            total=total,
+        )
 
-    async def export_records(self, *, account_id: int, game: str) -> GachaExportResponse:
+    async def export_records(self, *, account_id: int, game: str, game_uid: str) -> GachaExportResponse:
         self._ensure_supported_game(game)
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         result = await self.db.execute(
             select(GachaRecord)
-            .where(and_(GachaRecord.account_id == account_id, GachaRecord.game == game))
+            .where(
+                and_(
+                    GachaRecord.account_id == account_id,
+                    GachaRecord.game == game,
+                    GachaRecord.game_uid == normalized_game_uid,
+                )
+            )
             .order_by(GachaRecord.time_text.desc(), GachaRecord.record_id.desc())
         )
         records = result.scalars().all()
 
-        supported_prefixes = SUPPORTED_GACHA_GAME_CONFIGS[game]["supported_role_prefixes"]
-        role_result = await self.db.execute(
-            select(GameRole.game_uid)
-            .where(
-                GameRole.account_id == account_id,
-                or_(*(GameRole.game_biz.startswith(prefix) for prefix in supported_prefixes)),
-            )
-            .order_by(GameRole.id.asc())
-        )
-        game_uids = [str(uid) for uid in role_result.scalars().all() if uid]
-
-        # 当前导出仍基于扁平表，记录本身不携带角色 UID。
-        # 因此这里只能选择一个稳定 UID 作为单游戏 UIGF 分组键，保证导出的协议合法且行为可预期；
-        # 若未来把这里改成“按多 UID 拆分”，但底层数据仍未保存来源 UID，就会把同一批记录伪装成多角色数据。
-        export_uid = game_uids[0] if game_uids else "unknown"
         uigf_payload = export_uigf_v42(
             {
                 game: {
-                    export_uid: records,
+                    normalized_game_uid: records,
                 }
             }
         )
@@ -493,16 +546,22 @@ class GachaService:
         return GachaExportResponse(
             account_id=account_id,
             game=game,
+            game_uid=normalized_game_uid,
             exported_at=utc_now_naive(),
             total=len(records),
             uigf=uigf_payload,
         )
 
-    async def reset_records(self, *, account_id: int, game: str) -> GachaResetResponse:
+    async def reset_records(self, *, account_id: int, game: str, game_uid: str) -> GachaResetResponse:
         self._ensure_supported_game(game)
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         record_result = await self.db.execute(
             select(GachaRecord).where(
-                and_(GachaRecord.account_id == account_id, GachaRecord.game == game)
+                and_(
+                    GachaRecord.account_id == account_id,
+                    GachaRecord.game == game,
+                    GachaRecord.game_uid == normalized_game_uid,
+                )
             )
         )
         records = record_result.scalars().all()
@@ -511,7 +570,11 @@ class GachaService:
 
         job_result = await self.db.execute(
             select(GachaImportJob).where(
-                and_(GachaImportJob.account_id == account_id, GachaImportJob.game == game)
+                and_(
+                    GachaImportJob.account_id == account_id,
+                    GachaImportJob.game == game,
+                    GachaImportJob.game_uid == normalized_game_uid,
+                )
             )
         )
         jobs = job_result.scalars().all()
@@ -522,12 +585,13 @@ class GachaService:
         return GachaResetResponse(
             account_id=account_id,
             game=game,
+            game_uid=normalized_game_uid,
             deleted_records=len(records),
             deleted_import_jobs=len(jobs),
             message="抽卡记录已重置",
         )
 
-    def _parse_import_url(self, game: str, import_url: str) -> ParsedImportSource:
+    def _parse_import_url(self, game: str, game_uid: str, import_url: str) -> ParsedImportSource:
         raw = import_url.strip()
         parsed = urlparse(raw)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -538,9 +602,14 @@ class GachaService:
         if not any(keyword in netloc for keyword in config["host_keywords"]):
             raise HTTPException(status_code=400, detail=f"该链接与所选游戏“{config['name']}”不匹配")
 
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         params = {key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)}
         if not params.get("authkey"):
             raise HTTPException(status_code=400, detail="抽卡记录链接缺少 authkey，无法导入")
+
+        source_game_uid = str(params.get("game_uid") or "").strip()
+        if source_game_uid and source_game_uid != normalized_game_uid:
+            raise HTTPException(status_code=400, detail="抽卡记录链接中的 UID 与所选角色不一致")
 
         base_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
         masked_params = dict(params)
@@ -555,12 +624,19 @@ class GachaService:
 
         return ParsedImportSource(base_url=base_url, base_params=params, masked_url=masked_url)
 
-    async def _generate_genshin_authkey(self, account: MihoyoAccount) -> str:
+    async def _generate_genshin_authkey(self, account: MihoyoAccount, game_uid: str) -> str:
+        normalized_game_uid = self._normalize_game_uid(game_uid)
         role_result = await self.db.execute(
             select(GameRole)
             .where(
                 GameRole.account_id == account.id,
-                or_(*(GameRole.game_biz.startswith(prefix) for prefix in SUPPORTED_GACHA_GAME_CONFIGS["genshin"]["supported_role_prefixes"])),
+                GameRole.game_uid == normalized_game_uid,
+                or_(
+                    *(
+                        GameRole.game_biz.startswith(prefix)
+                        for prefix in SUPPORTED_GACHA_GAME_CONFIGS["genshin"]["supported_role_prefixes"]
+                    )
+                ),
             )
             .order_by(GameRole.id.asc())
         )
@@ -588,7 +664,7 @@ class GachaService:
 
         params = {
             "auth_appid": "webview_gacha",
-            "game_biz": "hk4e_cn",
+            "game_biz": role.game_biz,
             "game_uid": str(role.game_uid),
             "region": region,
         }
