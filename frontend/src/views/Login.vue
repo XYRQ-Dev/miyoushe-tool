@@ -255,9 +255,7 @@ async function handleRegister() {
   inset: 8% 12%;
   border-radius: 36px;
   border: 1px solid var(--border-soft);
-  background:
-    linear-gradient(var(--border-soft) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border-soft) 1px, transparent 1px);
+  background: var(--bg-elevated);
   background-size: 34px 34px;
   mask-image: radial-gradient(circle at center, black 48%, transparent 82%);
 }
@@ -290,9 +288,7 @@ async function handleRegister() {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  background:
-    radial-gradient(circle at top right, rgba(56, 189, 248, 0.2), transparent 34%),
-    linear-gradient(180deg, rgba(11, 25, 48, 0.92), rgba(13, 31, 58, 0.84));
+  background: var(--bg-elevated);
   color: #e7f0fb;
 }
 
@@ -329,7 +325,7 @@ async function handleRegister() {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  background: var(--bg-elevated);
   margin-top: 8px;
   flex: 0 0 auto;
 }
@@ -356,7 +352,7 @@ async function handleRegister() {
   justify-content: center;
   color: white;
   flex: 0 0 auto;
-  box-shadow: 0 16px 28px rgba(37, 99, 235, 0.22);
+  box-shadow: var(--shadow-soft);
 }
 
 .logo-area h2 {

@@ -508,7 +508,7 @@ onMounted(loadPageData)
   padding: 20px; border-radius: var(--radius-md); border: 1px solid var(--border-soft);
   background: var(--bg-elevated); backdrop-filter: blur(10px);
 }
-.stat-card-primary { background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.1), transparent 40%), var(--bg-elevated); border-color: rgba(99, 102, 241, 0.2); }
+.stat-card-primary { background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.1), transparent 40%), var(--bg-elevated); border-color: var(--border-soft); }
 .stat-label { font-size: 13px; color: var(--text-secondary); }
 .stat-value { margin-top: 8px; font-size: 28px; font-weight: 800; color: var(--text-primary); }
 .stat-value-compact { font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

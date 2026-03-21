@@ -610,7 +610,7 @@ onMounted(loadOverview)
 }
 
 .health-card-highlighted {
-  border-color: rgba(20, 184, 166, 0.72);
+  border-color: var(--border-soft);
   box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.18), var(--shadow-medium);
 }
 

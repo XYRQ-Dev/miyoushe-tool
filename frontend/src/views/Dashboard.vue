@@ -234,7 +234,7 @@ onMounted(loadData)
 }
 
 .action-bar .el-button--primary {
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 45%, #0f766e 100%);
+  background: var(--bg-elevated);
   border: none;
 }
 

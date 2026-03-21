@@ -235,7 +235,7 @@ onBeforeUnmount(() => {
   padding: 12px;
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(191, 219, 254, 0.12);
+  border: 1px solid var(--border-soft);
 }
 
 .brand-mark {
@@ -246,8 +246,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   color: #f8fbff;
-  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
-  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.24);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-soft);
 }
 
 .brand-copy {
@@ -316,12 +316,8 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 16px;
   padding: 20px 28px 14px;
-  background: linear-gradient(180deg, rgba(237, 243, 251, 0.96), rgba(237, 243, 251, 0.82));
+  background: var(--bg-elevated);
   backdrop-filter: blur(20px);
-}
-
-:global(html.dark) .shell-topbar {
-  background: linear-gradient(180deg, rgba(7, 17, 31, 0.96), rgba(7, 17, 31, 0.82));
 }
 
 .topbar-copy {

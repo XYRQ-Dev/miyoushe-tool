@@ -368,22 +368,17 @@ onMounted(loadOverview)
 .summary-card {
   padding: 22px;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-soft);
 }
 
 .summary-card-primary {
-  background:
-    radial-gradient(circle at top right, rgba(125, 211, 252, 0.18), transparent 32%),
-    linear-gradient(180deg, rgba(240, 249, 255, 0.98), rgba(224, 242, 254, 0.84));
+  background: var(--bg-elevated);
 }
 
 .summary-card-warm {
-  background:
-    radial-gradient(circle at top right, rgba(251, 191, 36, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(254, 243, 199, 0.84));
+  background: var(--bg-elevated);
 }
 
 .summary-label {
@@ -440,10 +435,9 @@ onMounted(loadOverview)
 .account-shell {
   padding: 20px;
   border-radius: 24px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
-  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-soft);
 }
 
 .account-shell-head {
@@ -483,10 +477,9 @@ onMounted(loadOverview)
 .role-card {
   padding: 18px;
   border-radius: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.05);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-soft);
 }
 
 .role-card-head {
@@ -537,13 +530,13 @@ onMounted(loadOverview)
   line-height: 1.5;
   color: #64748b;
   background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--border-soft);
 }
 
 .archive-pill-active {
   color: #0f766e;
   background: rgba(204, 251, 241, 0.72);
-  border-color: rgba(45, 212, 191, 0.26);
+  border-color: var(--border-soft);
 }
 
 .status-grid {
@@ -557,7 +550,7 @@ onMounted(loadOverview)
   padding: 14px;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(226, 232, 240, 0.88);
+  border: 1px solid var(--border-soft);
 }
 
 .status-label {
@@ -599,7 +592,7 @@ onMounted(loadOverview)
 }
 
 .asset-chip-muted {
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--bg-soft);
   color: var(--text-secondary);
 }
 
@@ -610,21 +603,7 @@ onMounted(loadOverview)
   gap: 8px;
 }
 
-:deep(html.dark) .summary-card,
-:deep(.dark) .summary-card,
-:deep(html.dark) .account-shell,
-:deep(.dark) .account-shell,
-:deep(html.dark) .role-card,
-:deep(.dark) .role-card {
-  background:
-    linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.92));
-}
-
-@media (max-width: 1180px) {
-  .summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
+@media (max-width: 1280px) {
   .role-grid {
     grid-template-columns: 1fr;
   }
