@@ -1,6 +1,6 @@
 <template>
   <div class="shell-layout">
-    <aside :class="['shell-sidebar', { 'shell-sidebar-collapsed': isSidebarCollapsed }]">
+    <aside v-if="!isMobileViewport" :class="['shell-sidebar', { 'shell-sidebar-collapsed': isSidebarCollapsed }]">
       <div class="brand-block">
         <div class="brand-mark">
           <el-icon :size="isSidebarCollapsed ? 22 : 20"><Star /></el-icon>
@@ -38,9 +38,51 @@
       </div>
     </aside>
 
+    <el-drawer
+      v-model="mobileDrawerVisible"
+      direction="ltr"
+      :with-header="false"
+      size="260px"
+      class="mobile-drawer-sidebar"
+    >
+      <div class="shell-sidebar shell-sidebar-mobile">
+        <div class="brand-block">
+          <div class="brand-mark">
+            <el-icon :size="20"><Star /></el-icon>
+          </div>
+          <div class="brand-copy">
+            <div class="brand-name">MiHaYou Tool</div>
+            <div class="brand-subtitle">签到与账号管理</div>
+          </div>
+        </div>
+
+        <el-menu
+          :default-active="activeMenu"
+          router
+          class="sidebar-menu"
+          background-color="transparent"
+          text-color="rgba(231, 240, 251, 0.72)"
+          active-text-color="#f8fbff"
+          @select="mobileDrawerVisible = false"
+        >
+          <el-menu-item v-for="menu in visibleMenus" :key="menu.key" :index="menu.path">
+            <el-icon><component :is="menuIconMap[menu.key]" /></el-icon>
+            <template #title>{{ menu.label }}</template>
+          </el-menu-item>
+        </el-menu>
+      </div>
+    </el-drawer>
+
     <div class="shell-main">
       <header class="shell-topbar">
         <div class="topbar-copy">
+          <el-button
+            v-if="isMobileViewport"
+            :icon="Expand"
+            circle
+            class="topbar-icon-button hamburger-btn"
+            @click="mobileDrawerVisible = true"
+          />
           <h1>{{ pageTitle }}</h1>
         </div>
         <div class="topbar-actions">
@@ -103,6 +145,7 @@ const userStore = useUserStore()
 const isCollapse = ref(false)
 const isTabletViewport = ref(false)
 const isMobileViewport = ref(false)
+const mobileDrawerVisible = ref(false)
 
 const menuIconMap: Record<AppMenuKey, unknown> = {
   dashboard: Odometer,
@@ -283,6 +326,9 @@ onBeforeUnmount(() => {
 
 .topbar-copy {
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .topbar-kicker {
@@ -294,10 +340,25 @@ onBeforeUnmount(() => {
 }
 
 .topbar-copy h1 {
-  margin: 6px 0 0;
+  margin: 0;
   font-size: 24px;
   line-height: 1.1;
   color: var(--text-primary);
+}
+
+.hamburger-btn {
+  margin-right: var(--space-2);
+}
+
+.shell-sidebar-mobile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.mobile-drawer-sidebar :deep(.el-drawer__body) {
+  padding: 0;
+  background: var(--bg-sidebar);
 }
 
 .topbar-actions {
@@ -388,42 +449,28 @@ onBeforeUnmount(() => {
     display: block;
   }
 
-  .shell-sidebar {
-    position: static;
-    width: auto;
-    height: auto;
-    padding: 14px;
-  }
-
-  .shell-sidebar-collapsed {
-    width: auto;
-  }
-
-  .sidebar-menu :deep(.el-menu--collapse) {
-    width: 100%;
-  }
-
   .shell-topbar,
   .shell-content {
     padding-inline: 16px;
   }
 
   .shell-topbar {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
   }
 
   .topbar-copy h1 {
-    font-size: 22px;
-  }
-
-  .topbar-actions {
-    width: 100%;
-    justify-content: space-between;
+    font-size: 20px;
   }
 
   .user-copy {
     display: none;
   }
+}
+
+.topbar-icon-button {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
 }
 </style>

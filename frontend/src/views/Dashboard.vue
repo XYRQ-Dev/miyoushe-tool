@@ -181,24 +181,25 @@ onMounted(loadData)
 .stat-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 
 .stat-card {
-  background: var(--card-bg);
-  border-radius: 20px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
   padding: 24px;
   display: flex;
   align-items: center;
-  gap: 16px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  gap: var(--space-4);
+  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--border-soft);
+  transition: transform var(--transition-medium), box-shadow var(--transition-medium);
 }
 
 .stat-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-medium);
 }
 
 .stat-icon {
@@ -217,6 +218,7 @@ onMounted(loadData)
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
@@ -274,15 +276,16 @@ onMounted(loadData)
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .calendar-day {
   text-align: center;
-  padding: 12px 8px;
+  padding: 12px var(--space-2);
   border-radius: 12px;
-  background: var(--bg-color);
-  transition: background 0.2s;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
+  transition: background var(--transition-fast);
 }
 
 .day-date {
@@ -297,27 +300,27 @@ onMounted(loadData)
 }
 
 .day-success {
-  color: #10b981;
+  color: var(--text-success);
 }
 
 .day-success .day-status {
-  color: #10b981;
+  color: var(--text-success);
 }
 
 .day-partial {
-  color: #f59e0b;
+  color: var(--text-warning);
 }
 
 .day-partial .day-status {
-  color: #f59e0b;
+  color: var(--text-warning);
 }
 
 .day-failed {
-  color: #ef4444;
+  color: var(--text-danger);
 }
 
 .day-failed .day-status {
-  color: #ef4444;
+  color: var(--text-danger);
 }
 
 .day-empty {

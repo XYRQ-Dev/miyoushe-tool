@@ -231,13 +231,13 @@ onMounted(loadAccounts)
 }
 
 .account-notice-info {
-  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.86));
-  border-color: rgba(59, 130, 246, 0.16);
+  background: var(--bg-info-soft);
+  border-color: var(--border-info-soft);
 }
 
 .account-notice-warning {
-  background: linear-gradient(135deg, rgba(255, 251, 235, 0.98), rgba(254, 243, 199, 0.88));
-  border-color: rgba(245, 158, 11, 0.18);
+  background: var(--bg-warning-soft);
+  border-color: var(--border-warning-soft);
 }
 
 .notice-title {
@@ -256,33 +256,33 @@ onMounted(loadAccounts)
 .account-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .account-item {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .credential-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  border-radius: 16px;
-  padding: 14px 16px;
+  gap: var(--space-3);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid transparent;
 }
 
 .credential-banner-warning {
-  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(255, 237, 213, 0.9));
-  border-color: rgba(249, 115, 22, 0.18);
+  background: var(--bg-warning-soft);
+  border-color: var(--border-warning-soft);
 }
 
 .credential-banner-success {
-  background: linear-gradient(135deg, rgba(236, 253, 245, 0.96), rgba(220, 252, 231, 0.88));
-  border-color: rgba(16, 185, 129, 0.18);
+  background: var(--bg-success-soft);
+  border-color: var(--border-success-soft);
 }
 
 .credential-banner-main {

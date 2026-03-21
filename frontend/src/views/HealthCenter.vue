@@ -500,34 +500,33 @@ onMounted(loadOverview)
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .summary-card {
   padding: 22px;
-  border-radius: 20px;
-  border: 1px solid var(--border-color);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-soft);
 }
 
 .summary-card-primary {
   background:
     radial-gradient(circle at top right, rgba(45, 212, 191, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(240, 253, 250, 0.98), rgba(204, 251, 241, 0.82));
+    var(--bg-elevated);
 }
 
 .summary-card-warning {
   background:
     radial-gradient(circle at top right, rgba(251, 191, 36, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(254, 243, 199, 0.84));
+    var(--bg-warning-soft);
 }
 
 .summary-card-danger {
   background:
     radial-gradient(circle at top right, rgba(248, 113, 113, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.84));
+    var(--bg-danger-soft);
 }
 
 .summary-label {
@@ -599,28 +598,27 @@ onMounted(loadOverview)
 .health-card {
   padding: 22px;
   border-radius: 22px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92));
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-soft);
+  transition: transform var(--transition-medium), box-shadow var(--transition-medium), border-color var(--transition-medium);
 }
 
 .health-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--shadow-medium);
 }
 
 .health-card-highlighted {
   border-color: rgba(20, 184, 166, 0.72);
-  box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.18), 0 20px 40px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.18), var(--shadow-medium);
 }
 
 .card-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .account-name {
@@ -636,30 +634,30 @@ onMounted(loadOverview)
 }
 
 .health-panel {
-  margin-top: 16px;
-  padding: 16px;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
   border-radius: 18px;
   border: 1px solid transparent;
 }
 
 .health-panel-healthy {
-  background: linear-gradient(135deg, rgba(236, 253, 245, 0.96), rgba(209, 250, 229, 0.82));
-  border-color: rgba(16, 185, 129, 0.2);
+  background: var(--bg-success-soft);
+  border-color: var(--border-success-soft);
 }
 
 .health-panel-warning {
-  background: linear-gradient(135deg, rgba(255, 251, 235, 0.96), rgba(254, 243, 199, 0.82));
-  border-color: rgba(245, 158, 11, 0.22);
+  background: var(--bg-warning-soft);
+  border-color: var(--border-warning-soft);
 }
 
 .health-panel-danger {
-  background: linear-gradient(135deg, rgba(254, 242, 242, 0.96), rgba(254, 226, 226, 0.82));
-  border-color: rgba(239, 68, 68, 0.22);
+  background: var(--bg-danger-soft);
+  border-color: var(--border-warning-soft);
 }
 
 .health-panel-unknown {
-  background: linear-gradient(135deg, rgba(241, 245, 249, 0.96), rgba(226, 232, 240, 0.82));
-  border-color: rgba(148, 163, 184, 0.22);
+  background: var(--bg-soft);
+  border-color: var(--border-soft);
 }
 
 .health-title {
@@ -679,7 +677,8 @@ onMounted(loadOverview)
   min-height: 28px;
   padding: 0 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.62);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
   display: inline-flex;
   align-items: center;
   font-size: 12px;
@@ -710,8 +709,8 @@ onMounted(loadOverview)
 .info-card {
   padding: 14px;
   border-radius: 16px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
 }
 
 .info-label {
@@ -742,20 +741,20 @@ onMounted(loadOverview)
   align-items: center;
   font-size: 12px;
   font-weight: 600;
-  color: #115e59;
-  background: rgba(45, 212, 191, 0.12);
+  color: var(--text-success);
+  background: var(--bg-success-soft);
 }
 
 .asset-chip-muted {
   color: var(--text-secondary);
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--bg-soft);
 }
 
 .action-row {
-  margin-top: 16px;
+  margin-top: var(--space-4);
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .event-list {
@@ -769,20 +768,19 @@ onMounted(loadOverview)
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92));
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
   text-align: left;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform var(--transition-medium), box-shadow var(--transition-medium);
 }
 
 .event-item:hover {
   transform: translateY(-1px);
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-soft);
 }
 
 .event-title {
@@ -803,16 +801,6 @@ onMounted(loadOverview)
   flex-direction: column;
   align-items: flex-end;
   gap: 10px;
-}
-
-:deep(html.dark) .summary-card,
-:deep(.dark) .summary-card,
-:deep(html.dark) .health-card,
-:deep(.dark) .health-card,
-:deep(html.dark) .event-item,
-:deep(.dark) .event-item {
-  background:
-    linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.92));
 }
 
 @media (max-width: 1180px) {
