@@ -578,21 +578,57 @@ class GachaService:
 
         five_star = [record for record in records if record.rank_type == "5"]
         four_star_count = sum(1 for record in records if record.rank_type == "4")
-        pool_counter: dict[tuple[str, str], int] = {}
+        
+        # Calculate per-pool detailed stats
+        pool_stats: dict[str, dict[str, Any]] = {}
         pool_names_map = SUPPORTED_GACHA_GAME_CONFIGS[game]["pool_names"]
-        for record in records:
+        
+        # Iterate backwards (oldest first) to build pity and history accurately
+        for record in reversed(records):
             pool_type = record.pool_type
             # 原神角色活动祈愿 2 (400) 与 1 (301) 共享保底，汇总时归入 301 统计。
             display_type = "301" if game == "genshin" and pool_type == "400" else pool_type
             pool_name = pool_names_map.get(display_type, record.pool_name or display_type)
-            key = (display_type, pool_name)
-            pool_counter[key] = pool_counter.get(key, 0) + 1
+            
+            if display_type not in pool_stats:
+                pool_stats[display_type] = {
+                    "pool_type": display_type,
+                    "pool_name": pool_name,
+                    "count": 0,
+                    "five_star_count": 0,
+                    "four_star_count": 0,
+                    "current_pity": 0,
+                    "five_star_history": [],
+                }
+            
+            stats = pool_stats[display_type]
+            stats["count"] += 1
+            
+            if record.rank_type == "4":
+                stats["four_star_count"] += 1
+                stats["current_pity"] += 1
+            elif record.rank_type == "5":
+                stats["five_star_count"] += 1
+                stats["five_star_history"].append(
+                    {
+                        "item_name": record.item_name,
+                        "time_text": record.time_text,
+                        "pity_count": stats["current_pity"] + 1,
+                    }
+                )
+                stats["current_pity"] = 0
+            else:
+                stats["current_pity"] += 1
+
+        # We reverse the history so the newest 5-star is at the top of the list in the UI
+        for stats in pool_stats.values():
+            stats["five_star_history"].reverse()
 
         pool_summaries = [
-            GachaPoolSummary(pool_type=pool_type, pool_name=pool_name, count=count)
-            for (pool_type, pool_name), count in sorted(
-                pool_counter.items(),
-                key=lambda item: (-item[1], item[0][0]),
+            GachaPoolSummary(**stats)
+            for _, stats in sorted(
+                pool_stats.items(),
+                key=lambda item: (-item[1]["count"], item[0]),
             )
         ]
 

@@ -65,10 +65,20 @@ class GachaImportUIGFRequest(BaseModel):
     uigf_json: dict[str, Any] | str
 
 
+class GachaFiveStarHistory(BaseModel):
+    item_name: str
+    time_text: str
+    pity_count: int
+
+
 class GachaPoolSummary(BaseModel):
     pool_type: str
     pool_name: str
     count: int
+    five_star_count: int = 0
+    four_star_count: int = 0
+    current_pity: int = 0
+    five_star_history: list[GachaFiveStarHistory] = Field(default_factory=list)
 
 
 class GachaSummaryResponse(BaseModel):
