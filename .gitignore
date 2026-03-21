@@ -18,6 +18,8 @@ frontend/components.d.ts
 # 如果把这类文件纳入版本库，会持续引入与业务功能无关的噪音变更，影响代码审查和提交边界判断。
 .playwright-cli/
 .superpowers/
+# Git worktree 是隔离开发工作区，不属于仓库源码；若误跟踪其内容，会把整套平行工作目录当成业务改动提交。
+.worktrees/
 frontend/codex-frontend-dev.stderr.log
 frontend/codex-frontend-dev.stdout.log
 output/
