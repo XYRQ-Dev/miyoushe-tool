@@ -58,69 +58,49 @@ const label = computed(() => {
 
 <style scoped>
 .badge-icon {
-  font-size: 12px;
-  vertical-align: middle;
+  font-size: 11px;
 }
 
 .status-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  white-space: nowrap;
-  width: fit-content;
-  min-width: 68px;
-  max-width: 100%;
-  height: 28px;
-  padding-inline: 10px;
-  border: none;
-  box-shadow: inset 0 0 0 1px transparent;
-}
-
-.status-badge--compact {
   min-width: 64px;
-  padding-inline: 8px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  font-weight: 700;
+  font-size: 11px;
 }
 
 .status-badge :deep(.el-tag__content) {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 4px;
-  white-space: nowrap;
-  word-break: keep-all;
-  line-height: 1;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
 }
 
 .status-badge--success {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(16, 185, 129, 0.2) 100%);
-  color: var(--success-color);
-  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.18);
+  background: var(--bg-success-soft);
+  color: var(--text-success);
 }
 
 .status-badge--failed {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.18) 100%);
-  color: var(--danger-color);
-  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18);
+  background: var(--bg-danger-soft);
+  color: var(--text-danger);
 }
 
 .status-badge--already_signed {
-  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(148, 163, 184, 0.18) 100%);
+  background: var(--bg-soft);
   color: var(--text-secondary);
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
 }
 
 .status-badge--risk {
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(245, 158, 11, 0.18) 100%);
-  color: var(--warning-color);
-  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.18);
+  background: var(--bg-warning-soft);
+  color: var(--text-warning);
 }
 
 .status-badge--unknown {
-  background: linear-gradient(135deg, rgba(148, 163, 184, 0.1) 0%, rgba(148, 163, 184, 0.18) 100%);
-  color: var(--text-secondary);
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+  background: var(--bg-soft);
+  color: var(--text-tertiary);
 }
 </style>

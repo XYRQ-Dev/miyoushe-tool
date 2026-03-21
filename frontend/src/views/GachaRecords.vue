@@ -335,9 +335,9 @@ function getPityColorClass(pity: number) {
   return 'is-normal'
 }
 function getPityProgressColor(pity: number) {
-  if (pity >= 74) return '#f56c6c' // Danger
-  if (pity >= 60) return '#e6a23c' // Warning
-  return '#409eff' // Primary
+  if (pity >= 74) return 'var(--color-danger)' // Danger
+  if (pity >= 60) return 'var(--color-warning)' // Warning
+  return 'var(--brand-primary)' // Primary
 }
 function calculateAvgPity(pool: GachaPool) {
   if (pool.five_star_count === 0) return '-'
@@ -492,7 +492,7 @@ onMounted(loadPageData)
 .data-management-card { margin-top: 20px; }
 .data-actions-row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; margin-bottom: 16px; }
 .inline-link-input { flex: 1; min-width: 300px; }
-.inline-link-input :deep(.el-input-group__append) { background-color: var(--el-color-primary); color: white; border-color: var(--el-color-primary); }
+.inline-link-input :deep(.el-input-group__append) { background-color: var(--brand-primary); color: white; border-color: var(--brand-primary); }
 .inline-link-input :deep(.el-input-group__append:hover) { opacity: 0.9; }
 .inline-link-input :deep(.el-button) { margin: -10px -20px; padding: 10px 20px; border-radius: 0; color: white; }
 
@@ -508,7 +508,7 @@ onMounted(loadPageData)
   padding: 20px; border-radius: var(--radius-md); border: 1px solid var(--border-soft);
   background: var(--bg-elevated); backdrop-filter: blur(10px);
 }
-.stat-card-primary { background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.1), transparent 40%), var(--bg-elevated); border-color: var(--border-soft); }
+.stat-card-primary { background: radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 40%), var(--bg-elevated); border-color: var(--border-soft); }
 .stat-label { font-size: 13px; color: var(--text-secondary); }
 .stat-value { margin-top: 8px; font-size: 28px; font-weight: 800; color: var(--text-primary); }
 .stat-value-compact { font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -531,8 +531,8 @@ onMounted(loadPageData)
 }
 .pity-value-group { margin: 12px 0; }
 .pity-number { font-size: 36px; font-weight: 900; }
-.pity-number.is-hard { color: var(--danger-color); }
-.pity-number.is-lucky { color: var(--success-color); }
+.pity-number.is-hard { color: var(--color-danger); }
+.pity-number.is-lucky { color: var(--color-success); }
 .pity-number.is-normal { color: var(--brand-primary); }
 .pity-total { font-size: 16px; color: var(--text-tertiary); margin-left: 4px; }
 .pity-progress { width: 100%; margin-bottom: 12px; }
@@ -553,8 +553,8 @@ onMounted(loadPageData)
   width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 16px; color: #fff;
 }
-.history-pity.is-hard { background: var(--danger-color); }
-.history-pity.is-lucky { background: var(--success-color); }
+.history-pity.is-hard { background: var(--color-danger); }
+.history-pity.is-lucky { background: var(--color-success); }
 .history-pity.is-normal { background: var(--brand-primary); }
 .history-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
 .history-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }

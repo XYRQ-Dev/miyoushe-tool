@@ -218,15 +218,19 @@ onMounted(loadAccounts)
   width: 100%;
 }
 
+.action-bar {
+  margin-bottom: var(--space-2);
+}
+
 .account-notice-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .account-notice {
-  border-radius: 20px;
-  padding: 18px 20px;
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
   border: 1px solid transparent;
 }
 
@@ -241,28 +245,38 @@ onMounted(loadAccounts)
 }
 
 .notice-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .notice-desc {
-  margin-top: 8px;
+  margin-top: 6px;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.6;
   color: var(--text-secondary);
 }
 
 .account-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-5);
 }
 
 .account-item {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  background: var(--bg-surface-muted);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-soft);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  transition: all var(--transition-medium);
+}
+
+.account-item:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-medium);
 }
 
 .credential-banner {
@@ -270,19 +284,16 @@ onMounted(loadAccounts)
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid transparent;
+  padding: 10px var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .credential-banner-warning {
   background: var(--bg-warning-soft);
-  border-color: var(--border-warning-soft);
 }
 
 .credential-banner-success {
   background: var(--bg-success-soft);
-  border-color: var(--border-success-soft);
 }
 
 .credential-banner-main {
@@ -290,22 +301,33 @@ onMounted(loadAccounts)
 }
 
 .credential-banner-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .credential-banner-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--text-secondary);
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-item :deep(.account-card) {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 @media (max-width: 768px) {
   .credential-banner {
     flex-direction: column;
     align-items: flex-start;
+    gap: 8px;
   }
 
   .credential-banner :deep(.el-button) {
@@ -313,3 +335,4 @@ onMounted(loadAccounts)
   }
 }
 </style>
+

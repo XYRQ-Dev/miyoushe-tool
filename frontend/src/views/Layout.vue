@@ -17,8 +17,8 @@
         router
         class="sidebar-menu"
         background-color="transparent"
-        text-color="rgba(231, 240, 251, 0.72)"
-        active-text-color="#f8fbff"
+        text-color="rgba(255, 255, 255, 0.7)"
+        active-text-color="white"
       >
         <el-menu-item v-for="menu in visibleMenus" :key="menu.key" :index="menu.path">
           <el-icon><component :is="menuIconMap[menu.key]" /></el-icon>
@@ -61,8 +61,8 @@
           router
           class="sidebar-menu"
           background-color="transparent"
-          text-color="rgba(231, 240, 251, 0.72)"
-          active-text-color="#f8fbff"
+          text-color="rgba(255, 255, 255, 0.7)"
+          active-text-color="white"
           @select="mobileDrawerVisible = false"
         >
           <el-menu-item v-for="menu in visibleMenus" :key="menu.key" :index="menu.path">
@@ -206,24 +206,25 @@ onBeforeUnmount(() => {
   min-height: 100vh;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
+  background: var(--bg-app);
 }
 
 .shell-sidebar {
   position: sticky;
   top: 0;
   height: 100vh;
-  width: 252px;
-  padding: 18px 16px 20px;
+  width: 240px;
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--space-4);
   background: var(--bg-sidebar);
   box-shadow: var(--shadow-sidebar);
-  transition: width var(--transition-medium), padding var(--transition-medium);
+  transition: width var(--transition-medium);
 }
 
 .shell-sidebar-collapsed {
-  width: 92px;
+  width: 84px;
   padding-inline: 12px;
 }
 
@@ -231,23 +232,23 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 64px;
-  padding: 12px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border-soft);
+  min-height: 60px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .brand-mark {
   width: 40px;
   height: 40px;
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #f8fbff;
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-soft);
+  color: white;
+  background: var(--bg-primary);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 .brand-copy {
@@ -255,15 +256,17 @@ onBeforeUnmount(() => {
 }
 
 .brand-name {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 800;
-  color: #f8fbff;
+  color: white;
+  letter-spacing: -0.01em;
 }
 
 .brand-subtitle {
-  margin-top: 4px;
-  font-size: 12px;
-  color: rgba(231, 240, 251, 0.72);
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 500;
 }
 
 .sidebar-menu {
@@ -271,34 +274,31 @@ onBeforeUnmount(() => {
   border-right: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .sidebar-menu :deep(.el-menu-item) {
-  height: 46px;
-  margin-bottom: 6px;
-  border-radius: 16px;
-  transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
-}
-
-.sidebar-menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.08) !important;
-  transform: translateX(1px);
+  height: 44px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 2px;
+  font-weight: 600;
+  font-size: 14px;
 }
 
 .sidebar-menu :deep(.el-menu-item.is-active) {
   background: var(--bg-sidebar-active) !important;
-  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.16);
+  color: white !important;
 }
 
-.sidebar-footer {
-  padding-top: 6px;
+.sidebar-menu :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.08) !important;
 }
 
 .sidebar-toggle {
   width: 100%;
-  justify-content: center;
-  color: rgba(231, 240, 251, 0.7);
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .shell-main {
@@ -315,9 +315,10 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 28px 14px;
+  padding: var(--space-4) var(--space-6);
   background: var(--bg-elevated);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .topbar-copy {
@@ -327,44 +328,18 @@ onBeforeUnmount(() => {
   gap: var(--space-3);
 }
 
-.topbar-kicker {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--brand-secondary);
-}
-
 .topbar-copy h1 {
   margin: 0;
-  font-size: 24px;
-  line-height: 1.1;
+  font-size: 20px;
+  font-weight: 800;
   color: var(--text-primary);
-}
-
-.hamburger-btn {
-  margin-right: var(--space-2);
-}
-
-.shell-sidebar-mobile {
-  position: relative;
-  width: 100%;
-  height: 100%;
-}
-
-.mobile-drawer-sidebar :deep(.el-drawer__body) {
-  padding: 0;
-  background: var(--bg-sidebar);
+  letter-spacing: -0.01em;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.topbar-icon-button {
-  flex: 0 0 auto;
+  gap: var(--space-3);
 }
 
 .user-entry {
@@ -372,70 +347,47 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 6px 6px;
-  border-radius: 18px;
-  background: var(--bg-elevated);
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  background: var(--bg-soft);
   border: 1px solid var(--border-soft);
   color: var(--text-primary);
   cursor: pointer;
-  box-shadow: var(--shadow-soft);
+  transition: all var(--transition-fast);
+}
+
+.user-entry:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
 }
 
 .user-avatar {
   background: var(--bg-primary);
-  color: #f8fbff;
-}
-
-.user-copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  min-width: 0;
+  color: white;
+  font-weight: 800;
 }
 
 .user-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
 .user-role {
-  margin-top: 2px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
-}
-
-.user-arrow {
-  color: var(--text-tertiary);
+  font-weight: 600;
 }
 
 .shell-content {
-  min-width: 0;
-  padding: 10px 28px 28px;
+  flex: 1;
+  padding: var(--space-5) var(--space-6);
 }
 
-.page-fade-enter-active,
-.page-fade-leave-active {
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
-}
-
-.page-fade-enter-from,
-.page-fade-leave-to {
-  opacity: 0;
-  transform: translateY(4px);
-}
-
-@media (max-width: 1080px) and (min-width: 769px) {
-  .shell-layout {
-    grid-template-columns: 92px minmax(0, 1fr);
-  }
-
+@media (max-width: 1080px) {
   .shell-sidebar {
-    width: 92px;
-    padding-inline: 12px;
+    width: 84px;
   }
-
-  .brand-copy,
-  .sidebar-toggle span {
+  .brand-copy, .sidebar-toggle span {
     display: none;
   }
 }
@@ -444,29 +396,14 @@ onBeforeUnmount(() => {
   .shell-layout {
     display: block;
   }
-
-  .shell-topbar,
-  .shell-content {
-    padding-inline: 16px;
-  }
-
   .shell-topbar {
-    align-items: center;
-    flex-direction: row;
+    padding: var(--space-3) var(--space-4);
   }
-
-  .topbar-copy h1 {
-    font-size: 20px;
+  .shell-content {
+    padding: var(--space-4);
   }
-
   .user-copy {
     display: none;
   }
-}
-
-.topbar-icon-button {
-  flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
 }
 </style>

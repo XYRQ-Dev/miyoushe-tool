@@ -161,118 +161,89 @@ const lastRefreshText = computed(() => {
 
 <style scoped>
 .account-card {
-  background:
-    radial-gradient(circle at top right, rgba(99, 102, 241, 0.12), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%);
-  border-radius: 20px;
-  padding: 20px;
-  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  transition: transform 0.2s, box-shadow 0.2s;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--border-soft);
+  transition: all var(--transition-medium);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 .account-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--shadow-medium);
 }
 
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
 }
 
 .account-info {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .account-name {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
 .account-uid {
   font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 2px;
+  color: var(--text-tertiary);
+  margin-top: 1px;
 }
 
 .status-pill {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 6px 10px;
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
 }
 
-.status-valid { color: #166534; background: #dcfce7; }
-.status-valid .status-dot { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
-.status-refreshing { color: #1d4ed8; background: #dbeafe; }
-.status-refreshing .status-dot { background: #3b82f6; box-shadow: 0 0 6px rgba(59, 130, 246, 0.4); }
-.status-expired { color: #b45309; background: #fef3c7; }
-.status-expired .status-dot { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.35); }
-.status-reauth { color: #b91c1c; background: #fee2e2; }
-.status-reauth .status-dot { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
-.status-unknown { color: #475569; background: #e2e8f0; }
-.status-unknown .status-dot { background: #94a3b8; }
+.status-valid { color: var(--text-success); background: var(--bg-success-soft); }
+.status-valid .status-dot { background: var(--color-success); box-shadow: 0 0 6px var(--color-success); }
+.status-refreshing { color: var(--text-info); background: var(--bg-info-soft); }
+.status-refreshing .status-dot { background: var(--color-info); box-shadow: 0 0 6px var(--color-info); }
+.status-expired { color: var(--text-warning); background: var(--bg-warning-soft); }
+.status-expired .status-dot { background: var(--color-warning); box-shadow: 0 0 6px var(--color-warning); }
+.status-reauth { color: var(--text-danger); background: var(--bg-danger-soft); }
+.status-reauth .status-dot { background: var(--color-danger); box-shadow: 0 0 6px var(--color-danger); }
+.status-unknown { color: var(--text-tertiary); background: var(--bg-soft); }
+.status-unknown .status-dot { background: var(--text-tertiary); }
 
 .status-panel {
-  border-radius: 16px;
-  padding: 14px;
-  margin-bottom: 16px;
-  border: 1px solid transparent;
-}
-
-.panel-valid {
-  background: linear-gradient(135deg, rgba(236, 253, 245, 0.95), rgba(220, 252, 231, 0.82));
-  border-color: rgba(16, 185, 129, 0.18);
-}
-
-.panel-refreshing {
-  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.86));
-  border-color: rgba(59, 130, 246, 0.18);
-}
-
-.panel-expired {
-  background: linear-gradient(135deg, rgba(255, 251, 235, 0.96), rgba(254, 243, 199, 0.86));
-  border-color: rgba(245, 158, 11, 0.18);
-}
-
-.panel-reauth {
-  background: linear-gradient(135deg, rgba(254, 242, 242, 0.96), rgba(254, 226, 226, 0.88));
-  border-color: rgba(239, 68, 68, 0.18);
-}
-
-.panel-unknown {
-  background: linear-gradient(135deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.86));
-  border-color: rgba(148, 163, 184, 0.2);
-}
-
-.status-panel-main {
-  margin-bottom: 10px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
 }
 
 .status-panel-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .status-panel-desc {
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--text-secondary);
   margin-top: 4px;
 }
@@ -282,83 +253,96 @@ const lastRefreshText = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
+  margin-top: 10px;
 }
 
 .meta-chip {
   display: inline-flex;
   align-items: center;
-  padding: 5px 10px;
-  border-radius: 999px;
-  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 10px;
   font-weight: 700;
-  color: #334155;
-  background: rgba(255, 255, 255, 0.66);
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.15);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
 }
 
 .meta-text {
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .status-panel-note {
-  margin-top: 10px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #475569;
+  margin-top: 8px;
+  padding-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  border-top: 1px dashed var(--border-soft);
 }
 
 .roles-section {
-  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .section-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 8px;
+  letter-spacing: 0.05em;
+}
+
+.role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .role-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-color);
-  border-radius: 8px;
-  margin-bottom: 4px;
+  padding: 6px 10px;
+  background: var(--bg-surface-muted);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-soft);
 }
 
 .role-game {
-  font-size: 12px;
-  color: #6366f1;
-  background: rgba(99, 102, 241, 0.1);
-  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--brand-primary);
+  background: var(--bg-info-soft);
+  padding: 2px 6px;
   border-radius: 4px;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .role-name {
   flex: 1;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .role-level {
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .role-unsupported {
-  font-size: 11px;
-  color: #b7791f;
-  background: linear-gradient(135deg, #fff7e6 0%, #ffefcc 100%);
-  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--text-warning);
+  background: var(--bg-warning-soft);
+  padding: 2px 6px;
   border-radius: 999px;
-  box-shadow: inset 0 0 0 1px rgba(221, 107, 32, 0.18);
   white-space: nowrap;
 }
 
@@ -366,46 +350,25 @@ const lastRefreshText = computed(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
 }
 
 .card-actions :deep(.el-button) {
-  border-radius: 999px;
-}
-
-:global(html.dark) .account-card {
-  background:
-    radial-gradient(circle at top right, rgba(96, 165, 250, 0.18), transparent 34%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, rgba(17, 24, 39, 0.96) 100%);
-  border-color: rgba(148, 163, 184, 0.16);
-  box-shadow: 0 16px 34px rgba(2, 6, 23, 0.45);
-}
-
-:global(html.dark) .meta-chip {
-  background: rgba(15, 23, 42, 0.45);
-  color: #cbd5e1;
-}
-
-:global(html.dark) .status-panel-note {
-  color: #cbd5e1;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  font-size: 12px;
+  padding: 0 12px;
 }
 
 @media (max-width: 640px) {
   .card-header {
+    flex-direction: column;
     align-items: flex-start;
     gap: 10px;
-    flex-direction: column;
-  }
-
-  .status-panel-meta {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .card-actions :deep(.el-button) {
-    flex: 1 1 calc(50% - 6px);
-    min-width: 0;
   }
 }
 </style>
+

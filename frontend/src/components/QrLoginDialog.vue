@@ -3,87 +3,80 @@
     :model-value="visible"
     @update:model-value="$emit('update:visible', $event)"
     :title="dialogTitle"
-    width="460px"
+    width="min(460px, 95%)"
     :close-on-click-modal="false"
     @close="handleDialogClose"
+    align-center
   >
     <el-tabs v-model="activeTab" class="login-tabs" stretch>
-      <el-tab-pane label="高权限登录二维码" name="qr">
+      <el-tab-pane label="扫码登录" name="qr">
         <div class="qr-container">
           <div v-if="status === 'initializing'" class="qr-loading">
             <el-icon class="loading-icon" :size="40"><Loading /></el-icon>
-            <p>正在准备高权限登录二维码...</p>
+            <p>正在初始化高权限登录...</p>
           </div>
 
           <div v-else-if="status === 'qr_ready' || status === 'scanned'" class="qr-code">
             <img v-if="qrImage" :src="'data:image/png;base64,' + qrImage" alt="高权限登录二维码" />
             <div v-if="status === 'scanned'" class="scanned-overlay">
-              <el-icon :size="40" color="#10b981"><CircleCheck /></el-icon>
-              <p>已扫码，请在米游社 App 内确认高权限登录</p>
+              <el-icon :size="40" color="var(--color-success)"><CircleCheck /></el-icon>
+              <p>已扫码，请在 App 内确认</p>
             </div>
           </div>
 
           <div v-else-if="status === 'success'" class="qr-success">
-            <el-icon :size="48" color="#10b981"><CircleCheck /></el-icon>
-            <p>已升级高权限登录态</p>
+            <el-icon :size="48" color="var(--color-success)"><CircleCheck /></el-icon>
+            <p>登录成功</p>
             <p class="sub-text">
               {{ rolesCount > 0 ? `已同步 ${rolesCount} 个游戏角色` : '正在刷新账号列表' }}
             </p>
           </div>
 
           <div v-else-if="status === 'failed' || status === 'timeout'" class="qr-error">
-            <el-icon :size="48" color="#ef4444"><CircleClose /></el-icon>
-            <p>{{ errorMessage || '高权限登录失败' }}</p>
-            <el-button type="primary" size="small" @click="startQrLogin">重新获取二维码</el-button>
+            <el-icon :size="48" color="var(--color-danger)"><CircleClose /></el-icon>
+            <p>{{ errorMessage || '登录失败' }}</p>
+            <el-button type="primary" size="small" @click="startQrLogin" round>重新获取</el-button>
           </div>
 
           <div v-if="status === 'qr_ready'" class="qr-hint">
-            <p>打开米游社 App → 我的 → 左上角扫码</p>
-            <p>确认后会直接升级当前账号的高权限登录态</p>
-            <p class="timeout-hint">二维码有效期 3 分钟</p>
+            <p>使用米游社 App 扫码</p>
+            <p class="timeout-hint">有效期 3 分钟</p>
           </div>
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="短信验证码登录" name="sms">
+      <el-tab-pane label="短信登录" name="sms">
         <div class="sms-container">
           <el-alert
             type="warning"
             :closable="false"
             show-icon
-            title="短信验证码入口当前只校验高权限根凭据"
-            description="验证码通过后，前端不会把它当成“账号已绑定”或“已升级完成”。这是当前后端接口边界：短信登录返回根凭据，但不负责账号落库，因此仍需回到二维码页签完成绑定或升级。"
-          />
+            title="短信登录仅用于凭据校验"
+          >
+            校验通过后，请切回扫码页签完成绑定。
+          </el-alert>
 
           <el-form label-position="top" class="sms-form">
             <el-form-item label="手机号">
               <el-input
                 v-model="smsForm.mobile"
                 maxlength="11"
-                placeholder="请输入米游社绑定手机号"
+                placeholder="米游社绑定手机号"
               />
             </el-form-item>
 
-            <el-form-item label="短信验证码">
+            <el-form-item label="验证码">
               <el-input
                 v-model="smsForm.captcha"
                 maxlength="8"
-                placeholder="请输入短信验证码"
+                placeholder="短信验证码"
               >
                 <template #append>
                   <el-button :loading="smsCaptchaSending" @click="handleSendSmsCaptcha">
-                    发送验证码
+                    获取
                   </el-button>
                 </template>
               </el-input>
-              <div v-if="smsCaptchaMessage" class="form-hint">{{ smsCaptchaMessage }}</div>
-            </el-form-item>
-
-            <el-form-item label="Aigis 风控透传参数（可选）">
-              <el-input
-                v-model="smsForm.aigis"
-                placeholder="如服务端要求风控透传，可在此填写或保留后端回传值"
-              />
             </el-form-item>
 
             <div class="sms-actions">
@@ -93,40 +86,25 @@
                 :disabled="!canVerifySms"
                 @click="handleVerifySms"
               >
-                校验高权限根凭据
+                校验凭据
               </el-button>
-              <el-button @click="switchToQrTab">改用二维码完成绑定</el-button>
+              <el-button @click="switchToQrTab">返回扫码</el-button>
             </div>
           </el-form>
 
           <div v-if="smsVerifyResult" class="sms-result">
             <div class="sms-result-head">
-              <el-icon :size="28" color="#10b981"><CircleCheck /></el-icon>
-              <div>
-                <div class="sms-result-title">高权限根凭据校验成功</div>
-                <div class="sms-result-desc">
-                  当前仅确认短信登录拿到了 Passport 根凭据；账号列表不会自动新增或升级。
-                  请切回二维码页签完成{{ accountId ? '当前账号的高权限升级' : '账号绑定' }}。
-                </div>
-              </div>
+              <el-icon :size="24" color="var(--color-success)"><CircleCheck /></el-icon>
+              <div class="sms-result-title">校验成功</div>
             </div>
-
             <div class="sms-result-grid">
               <div class="result-item">
-                <span class="result-label">米哈游通行证 UID</span>
+                <span class="result-label">UID</span>
                 <span class="result-value">{{ smsVerifyResult.stuid || '-' }}</span>
               </div>
               <div class="result-item">
                 <span class="result-label">MID</span>
                 <span class="result-value">{{ smsVerifyResult.mid || '-' }}</span>
-              </div>
-              <div class="result-item">
-                <span class="result-label">凭据来源</span>
-                <span class="result-value">{{ smsVerifyResult.credential_source || 'passport_sms' }}</span>
-              </div>
-              <div class="result-item">
-                <span class="result-label">Login Ticket</span>
-                <span class="result-value">{{ smsVerifyResult.login_ticket || '-' }}</span>
               </div>
             </div>
           </div>
@@ -419,20 +397,20 @@ watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 8px 8px;
-  min-height: 320px;
+  padding: var(--space-4) 0;
+  min-height: 300px;
   justify-content: center;
 }
 
 .qr-loading {
   text-align: center;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 
 .loading-icon {
   animation: spin 1s linear infinite;
-  color: var(--primary-color);
-  margin-bottom: 16px;
+  color: var(--brand-primary);
+  margin-bottom: var(--space-4);
 }
 
 @keyframes spin {
@@ -442,11 +420,13 @@ watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
 
 .qr-code {
   position: relative;
-  width: 240px;
-  height: 240px;
-  border-radius: 12px;
+  width: 220px;
+  height: 220px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  border: 2px solid var(--border-color);
+  border: 1px solid var(--border-soft);
+  background: white;
+  padding: 8px;
 }
 
 .qr-code img {
@@ -458,16 +438,21 @@ watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
 .scanned-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(4px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  text-align: center;
+  padding: 20px;
 }
 
-:global(html.dark) .scanned-overlay {
-  background: rgba(30, 41, 59, 0.9);
+.scanned-overlay p {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .qr-success,
@@ -477,20 +462,20 @@ watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
 
 .qr-success p,
 .qr-error p {
-  margin-top: 12px;
+  margin-top: var(--space-3);
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
 .sub-text {
   font-size: 13px !important;
-  font-weight: 400 !important;
-  color: var(--text-secondary) !important;
+  font-weight: 500 !important;
+  color: var(--text-tertiary) !important;
 }
 
 .qr-hint {
-  margin-top: 20px;
+  margin-top: var(--space-4);
   text-align: center;
 }
 
@@ -501,14 +486,14 @@ watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
 }
 
 .timeout-hint {
-  font-size: 12px !important;
-  opacity: 0.7;
+  font-size: 11px !important;
+  color: var(--text-tertiary) !important;
 }
 
 .sms-container {
   align-items: stretch;
   justify-content: flex-start;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .sms-form {
@@ -517,78 +502,63 @@ watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
 
 .sms-actions {
   display: flex;
-  flex-wrap: wrap;
   gap: 12px;
+  margin-top: var(--space-2);
 }
 
-.form-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-secondary);
+.sms-actions .el-button {
+  flex: 1;
 }
 
 .sms-result {
-  border-radius: 16px;
-  padding: 16px;
-  background: linear-gradient(135deg, rgba(236, 253, 245, 0.95), rgba(220, 252, 231, 0.86));
-  border: 1px solid rgba(16, 185, 129, 0.18);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--bg-success-soft);
+  border: 1px solid var(--border-success-soft);
 }
 
 .sms-result-head {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .sms-result-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  color: var(--text-primary);
-}
-
-.sms-result-desc {
-  margin-top: 4px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-secondary);
+  color: var(--text-success);
 }
 
 .sms-result-grid {
-  margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .result-item {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.7);
 }
 
 .result-label {
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
 }
 
 .result-value {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  word-break: break-all;
+  font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 640px) {
-  .sms-actions :deep(.el-button) {
-    flex: 1 1 100%;
-  }
-
-  .sms-result-grid {
-    grid-template-columns: 1fr;
+@media (max-width: 480px) {
+  .sms-actions {
+    flex-direction: column;
   }
 }
 </style>
