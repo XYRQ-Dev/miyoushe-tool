@@ -41,7 +41,6 @@
     <div class="shell-main">
       <header class="shell-topbar">
         <div class="topbar-copy">
-          <div class="topbar-kicker">{{ topbarKicker }}</div>
           <h1>{{ pageTitle }}</h1>
         </div>
         <div class="topbar-actions">
@@ -135,12 +134,6 @@ const isSidebarCollapsed = computed(() => {
 const pageTitle = computed(() => {
   const matchedMenu = APP_MENUS.find((item) => item.path === route.path)
   return matchedMenu?.label || '米游社工具台'
-})
-
-const topbarKicker = computed(() => {
-  if (route.path.startsWith('/admin')) return 'Admin Surface'
-  if (route.path === '/') return 'Operational Surface'
-  return 'Unified Workspace'
 })
 
 function handleLogout() {

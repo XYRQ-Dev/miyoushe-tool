@@ -1,13 +1,5 @@
 <template>
   <div class="app-page settings-page">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">System Controls</div>
-        <h2 class="page-title">系统设置</h2>
-        <p class="page-desc">调整通知、自动签到、界面模式和邮件发送配置。</p>
-      </div>
-    </section>
-
     <el-card class="settings-card panel-card" shadow="never">
       <template #header>
         <div class="section-head">

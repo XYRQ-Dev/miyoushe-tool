@@ -1,17 +1,10 @@
 <template>
   <div class="app-page accounts-page">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">Account Console</div>
-        <h2 class="page-title">账号管理</h2>
-        <p class="page-desc">绑定高权限账号、校验并尝试修复登录态，并查看每个账号下的角色信息。</p>
-      </div>
-      <div class="page-actions">
-        <el-button type="primary" :icon="Plus" @click="handleAddAccount">
-          添加高权限账号
-        </el-button>
-      </div>
-    </section>
+    <div class="action-bar">
+      <el-button type="primary" :icon="Plus" @click="handleAddAccount">
+        添加高权限账号
+      </el-button>
+    </div>
 
     <section class="account-notice-grid">
       <div class="account-notice account-notice-info">

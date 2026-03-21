@@ -1,18 +1,7 @@
 <template>
   <div class="app-page logs-page">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">Execution Trace</div>
-        <h2 class="page-title">签到日志</h2>
-        <p class="page-desc">按时间、账号和状态筛选签到结果，快速查看最近执行情况。</p>
-      </div>
-      <div class="page-actions">
-        <el-button :icon="Search" @click="loadLogs">刷新结果</el-button>
-      </div>
-    </section>
-
     <el-card class="filter-card filter-panel" shadow="never">
-      <el-form inline>
+      <el-form inline size="small">
         <el-form-item label="状态">
           <el-select v-model="filters.status" clearable placeholder="全部" style="width: 140px">
             <el-option label="成功" value="success" />
@@ -30,12 +19,12 @@
             end-placeholder="结束日期"
             format="YYYY-MM-DD"
             value-format="YYYY-MM-DD"
-            style="width: 280px"
+            style="width: 250px"
           />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :icon="Search" @click="loadLogs">查询</el-button>
-          <el-button @click="resetFilters">重置</el-button>
+          <el-button type="primary" :icon="Search" round @click="loadLogs">查询</el-button>
+          <el-button :icon="RefreshLeft" round @click="resetFilters">重置</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -104,7 +93,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { Search, RefreshLeft } from '@element-plus/icons-vue'
 import { logApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
 import { getGameName } from '../constants/game'
@@ -175,18 +164,53 @@ onBeforeUnmount(() => {
 <style scoped>
 .logs-page {
   width: 100%;
+  gap: 12px !important; /* Increased from 4px to 12px for better breathing room */
 }
 
-.filter-card {
-  padding: 0;
+.logs-page :deep(.filter-card.filter-panel) {
+  margin-bottom: 0;
+  border-radius: 16px;
+  padding: 0 !important; /* Force remove the 20px padding from app-theme.css */
 }
 
-.filter-card :deep(.el-card__body) {
-  padding: 0;
+.logs-page :deep(.filter-card.filter-panel .el-card__body) {
+  padding: 12px 24px !important;
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.filter-card :deep(.el-form) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.filter-card :deep(.el-form-item) {
+  margin-bottom: 0;
+  margin-right: 0;
+  display: flex;
+  align-items: center;
+}
+
+.filter-card :deep(.el-form-item__label) {
+  padding-right: 8px;
+  line-height: normal;
+  display: flex;
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.filter-card :deep(.el-form-item__content) {
+  line-height: normal;
+  display: flex;
+  align-items: center;
 }
 
 .table-card {
   overflow: hidden;
+  border-radius: 20px;
 }
 
 .pagination {

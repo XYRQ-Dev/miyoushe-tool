@@ -1,16 +1,13 @@
 <template>
   <div class="app-page health-page">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">System Pulse</div>
-        <h2 class="page-title">账号健康中心</h2>
-        <p class="page-desc">{{ headlineSubtitle }}</p>
-      </div>
-      <div class="page-actions">
-        <div class="soft-chip">{{ headlineTitle }}</div>
-        <el-button :icon="Refresh" :loading="loading" @click="loadOverview">刷新</el-button>
-      </div>
-    </section>
+    <el-alert
+      v-if="headlineSubtitle"
+      :title="`${headlineTitle} —— ${headlineSubtitle}`"
+      :type="overview.summary.reauth_required_accounts > 0 ? 'error' : (overview.summary.warning_accounts > 0 ? 'warning' : 'success')"
+      show-icon
+      :closable="false"
+      class="page-info-alert"
+    />
 
     <div class="summary-grid">
       <div class="summary-card summary-card-primary">

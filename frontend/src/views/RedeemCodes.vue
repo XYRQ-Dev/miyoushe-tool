@@ -1,16 +1,13 @@
 <template>
   <div class="app-page redeem-page">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">Code Control</div>
-        <h2 class="page-title">兑换码中心</h2>
-        <p class="page-desc">选择游戏和账号后即可执行兑换，并查看最近批次结果。</p>
-      </div>
-      <div class="page-actions">
-        <div class="soft-chip">{{ latestBatchTitle }}</div>
-        <div class="soft-chip">{{ latestBatchSummary }}</div>
-      </div>
-    </section>
+    <el-alert
+      v-if="latestBatch"
+      :title="`${latestBatchTitle} —— ${latestBatchSummary}`"
+      type="success"
+      show-icon
+      :closable="false"
+      class="page-info-alert"
+    />
 
     <el-card class="control-card panel-card" shadow="never">
       <template #header>

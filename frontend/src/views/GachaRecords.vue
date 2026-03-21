@@ -1,15 +1,13 @@
 <template>
   <div class="app-page gacha-page">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">Asset Archive</div>
-        <h2 class="page-title">抽卡记录中心</h2>
-        <p class="page-desc">选择账号、游戏和角色 UID 后，可手贴完整抽卡链接；原神还支持从账号自动导入，也可导入或导出 UIGF 备份。</p>
-      </div>
-      <div class="page-actions">
-        <div class="soft-chip">{{ latestImportMessage }}</div>
-      </div>
-    </section>
+    <el-alert
+      v-if="latestImportMessage !== '尚未执行导入'"
+      :title="latestImportMessage"
+      type="success"
+      show-icon
+      :closable="false"
+      class="page-info-alert"
+    />
 
     <el-card class="import-card panel-card" shadow="never">
       <template #header>

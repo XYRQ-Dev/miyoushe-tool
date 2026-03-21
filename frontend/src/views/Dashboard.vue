@@ -1,13 +1,5 @@
 <template>
   <div class="app-page dashboard">
-    <section class="page-toolbar">
-      <div class="page-title-group">
-        <div class="page-kicker">Operational Surface</div>
-        <h2 class="page-title">仪表盘</h2>
-        <p class="page-desc">快速查看今日签到状态，并执行手动签到与最近记录回看。</p>
-      </div>
-    </section>
-
     <div class="stat-cards">
       <div class="stat-card" style="--accent: #2563eb">
         <div class="stat-icon">
@@ -195,18 +187,18 @@ onMounted(loadData)
 
 .stat-card {
   background: var(--card-bg);
-  border-radius: 16px;
+  border-radius: 20px;
   padding: 24px;
   display: flex;
   align-items: center;
   gap: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  transition: transform 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
 }
 
 .stat-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.09);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 .stat-icon {
