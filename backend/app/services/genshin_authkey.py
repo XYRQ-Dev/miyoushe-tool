@@ -28,7 +28,7 @@ GENSHIN_REGION_BY_GAME_BIZ = {
 
 
 class GenshinAuthkeyService:
-    def __init__(self, db: AsyncSession, *, timeout: float = 15.0):
+    def __init__(self, db: AsyncSession, timeout: float = 15.0):
         self.db = db
         self.timeout = timeout
 
@@ -55,11 +55,14 @@ class GenshinAuthkeyService:
         if not authkey or not authkey_ver or not sign_type:
             raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游未返回完整票据")
 
-        return self._build_import_url_from_authkey(
-            authkey=authkey,
-            authkey_ver=authkey_ver,
-            sign_type=sign_type,
-        )
+        params = {
+            "authkey": authkey,
+            "authkey_ver": authkey_ver,
+            "sign_type": sign_type,
+            "lang": "zh-cn",
+            "gacha_type": "301",
+        }
+        return f"{GENSHIN_GACHA_LOG_API_URL}?{urlencode(params)}"
 
     def _normalize_supported_role(self, role: GameRole) -> tuple[str, str]:
         if role.game_biz != "hk4e_cn":
@@ -114,14 +117,3 @@ class GenshinAuthkeyService:
         if not isinstance(response_payload, dict):
             raise HTTPException(status_code=400, detail="原神 authkey 生成失败：上游返回了不符合预期的响应结构")
         return response_payload
-
-    @staticmethod
-    def _build_import_url_from_authkey(*, authkey: str, authkey_ver: str, sign_type: str) -> str:
-        params = {
-            "authkey": authkey,
-            "authkey_ver": authkey_ver,
-            "sign_type": sign_type,
-            "lang": "zh-cn",
-            "gacha_type": "301",
-        }
-        return f"{GENSHIN_GACHA_LOG_API_URL}?{urlencode(params)}"
