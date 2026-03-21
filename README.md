@@ -13,7 +13,7 @@
 - 日志接口与前端展示统一按东八区语义处理
 - 角色资产总览，按账号聚合角色、抽卡与兑换入口
 - 账号健康中心，聚合登录态、签到结果与重登风险
-- 抽卡记录中心，支持链接导入、原神账号自动导入、UIGF v4.2 导入导出、按游戏重置与基础统计
+- 抽卡记录中心，支持链接导入、原神账号自动导入、UIGF v4.2 导入导出、按 `账号 + 游戏 + 角色 UID` 隔离档案、按当前 UID 重置与基础统计
 - 兑换码中心，支持按游戏筛选账号、批量执行与历史批次回看
 - 用户个人通知邮箱、通知策略与深色模式设置
 - 管理员系统 SMTP 配置、菜单与功能开关管理、用户启停管理
@@ -39,7 +39,6 @@
 .
 ├─ backend/   后端 FastAPI 服务
 ├─ frontend/  前端 Vue 3 管理界面
-├─ data/      旧 SQLite 迁移源库可选目录
 ├─ .env.example
 └─ docker-compose.yml
 ```
@@ -90,40 +89,13 @@ docker compose up -d --build
 默认 Docker 配置会把后端容器时区固定为 `Asia/Shanghai`，因此 `docker logs miyoushe-backend`
 里看到的业务日志和 Uvicorn 访问日志默认都是东八区时间；如果脱离 Docker 单独运行，则日志时间跟随该进程所在系统时区。
 
-### 从旧 SQLite 升级到 MySQL 8
+### 当前数据库约束
 
-如果你本机已经安装了 MySQL 8，推荐优先走宿主机 MySQL 路径：
+当前项目已经正式收口为 `MySQL-only`：
 
-```powershell
-cd backend
-.\.venv313\Scripts\python.exe scripts\migrate_sqlite_to_mysql.py --sqlite-path ..\data\miyoushe.db --mysql-url "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
-cd ..
-docker compose up -d --build frontend
-```
-
-如果你希望直接使用 `docker-compose.yml` 内置的 MySQL 容器，也可以先启动数据库容器，再在宿主机执行迁移：
-
-```powershell
-docker compose up -d mysql
-cd backend
-.\.venv313\Scripts\python.exe scripts\migrate_sqlite_to_mysql.py --sqlite-path ..\data\miyoushe.db --mysql-url "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
-cd ..
-docker compose up -d --build backend frontend
-```
-
-迁移脚本只迁核心数据：
-
-- `users`
-- `mihoyo_accounts`
-- `game_roles`
-- `task_configs`
-- `task_logs`
-- `system_settings`
-
-以下历史数据不会迁移，会在新库中从空状态重新积累：
-
-- 抽卡导入历史与抽卡记录
-- 兑换码批次与执行明细
+- 运行时只接受 `mysql+asyncmy://` 连接串
+- 不再支持 SQLite 运行时、SQLite 补列、SQLite 迁移脚本或 SQLite 测试路径
+- 如你手里仍有旧 SQLite 备份，请把它视为历史备份文件，而不是当前版本可直接接入的正式数据库
 
 ## 配置说明
 
@@ -144,6 +116,8 @@ docker compose up -d --build backend frontend
 - Docker Compose 通过 `MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD` 启动 MySQL 服务
 - 本机直接启动后端时，默认连接目标是 `127.0.0.1:3306`
 - 若你要接外部 MySQL，只需覆盖 `DATABASE_URL`，不必继续使用内置 MySQL 容器
+- 后端测试必须额外显式提供 `TEST_DATABASE_URL`
+- `TEST_DATABASE_URL` 也只接受 `mysql+asyncmy://`，缺失或写成其他方言时测试会失败快，而不是偷偷回落到 SQLite
 
 ### 3. 时间与日志配置
 
@@ -197,8 +171,11 @@ docker compose up -d --build backend frontend
 抽卡记录中心当前会显示：
 
 - 正式交换协议为 `UIGF v4.2`
-- 原神支持“手贴完整链接 / 从账号自动导入 / 导入导出 UIGF”
+- 抽卡档案正式维度为 `账号 + 游戏 + 角色 UID`
+- 前端必须先选择“账号 -> 游戏 -> 角色 UID”，同账号同游戏的多个 UID 会严格隔离
+- 原神支持“手贴完整链接 / 从账号自动导入 / 导入导出 UIGF”，且自动导入必须显式绑定当前所选 `game_uid`
 - 星穹铁道当前只支持“手贴完整链接 / 导入导出 UIGF”
+- UIGF 导入导出都严格按当前 `game_uid` 工作，不再把同游戏多个 UID 压平成一份档案
 
 ### 8. 签到链路差异
 
@@ -218,16 +195,21 @@ docker compose up -d --build backend frontend
 
 ## 常见问题
 
-### 1. 旧 SQLite 升级到新版本后怎么迁到 MySQL
+### 1. 为什么后端测试必须配置 TEST_DATABASE_URL
 
-不要把旧 SQLite 文件直接挂到新版本后端继续跑。当前默认部署目标是 MySQL 8，正确方式是：
+当前后端测试底座已经切到 `MySQL-only`，不会再自动回落到 SQLite。
 
-- 先启动 MySQL
-- 执行 `scripts/migrate_sqlite_to_mysql.py`
-- 确认迁移校验通过
-- 再启动后端和前端
+正确做法是：
 
-迁移脚本在任意一步失败时会整批回滚核心数据，因此修复问题后可以直接重跑；不应再出现“半迁移成功后必须手工清库”的流程。
+- 先准备一个专用测试 schema，例如 `miyoushe_test`
+- 显式设置 `TEST_DATABASE_URL=mysql+asyncmy://<user>:<password>@127.0.0.1:3306/miyoushe_test?charset=utf8mb4`
+- 再运行后端测试
+
+注意：
+
+- 测试基座会在每个用例前建表并清空所有表
+- 不要把 `TEST_DATABASE_URL` 指向正式业务库
+- 如果缺少测试库或权限不足，测试会直接失败，而不是偷偷换到别的数据库
 
 ### 2. 签到状态失败或提示维护中
 
@@ -337,12 +319,15 @@ npm run build
 ## 维护提示
 
 - 当前生产默认以 MySQL 8 为准；如果需要从 SQLite 升级，请走显式迁移脚本，不要再依赖“重启后自动补列”
+- 当前版本已不再支持 SQLite 迁移脚本、SQLite 兼容补列或 SQLite 测试路径；请直接维护 MySQL 数据库与专用测试库
 - `ENCRYPTION_KEY` 必须固定；如果仍使用运行期随机默认值，服务重启后旧高权限根凭据与工作 Cookie 都会无法解密
 - 正式登录底座已经切到官方 Passport，高权限凭据边界见 [docs/maintenance/passport-high-privilege-login.md](docs/maintenance/passport-high-privilege-login.md)
 - 历史网页登录链路的凭据边界见 [docs/maintenance/web-login-credential-boundary.md](docs/maintenance/web-login-credential-boundary.md)，不要再基于拿不到的数据设计产品能力
 - 账号进入 `reauth_required` 后，通知和 UI 都要保持“明确但不过度惊扰”的语义，避免一边高频发信、一边在页面里堆原始错误文本
 - 抽卡正式交换协议为 `UIGF v4.2`；不要再把私有 JSON records 数组当成对外标准
-- 原神账号自动导入目前只支持原神；看到 `hkrpg` 的 UIGF 字段并不意味着星穹铁道也已支持账号直连导入
+- 抽卡档案正式维度是 `账号 + 游戏 + game_uid`；任何跳到 `/gacha` 的入口都必须带上目标 `game_uid`
+- 原神账号自动导入目前只支持原神，且必须显式指定目标 `game_uid`；看到 `hkrpg` 的 UIGF 字段并不意味着星穹铁道也已支持账号直连导入
+- 后端测试前必须确认 `TEST_DATABASE_URL` 指向独立测试 schema；缺少可写测试库时，不要拿正式库跑清库测试
 - 签到链路不要随意删减设备参数、`DS` 或风控延迟，这些机制必须成套存在
 - 崩坏3与绝区零存在游戏专属活动参数与请求头差异，后续若要重构签到配置，请先保留“按游戏覆盖 URL / Referer / signgame”的能力
 - 管理员 SMTP 与用户通知邮箱是两层配置，排障时不要混淆

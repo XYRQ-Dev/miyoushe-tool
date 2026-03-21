@@ -48,6 +48,25 @@ class GachaUIGFTests(unittest.TestCase):
         self.assertEqual(payload["hkrpg"][0]["list"][0]["gacha_id"], "synthetic-11")
         self.assertNotIn("uigf_gacha_type", payload["hkrpg"][0]["list"][0])
 
+    def test_export_uigf_v42_preserves_multiple_uid_sections_without_flattening(self):
+        payload = export_uigf_v42(
+            {
+                "genshin": {
+                    "10001": [self._build_genshin_record()],
+                    "10002": [
+                        {
+                            **self._build_genshin_record(),
+                            "record_id": "1000002",
+                            "item_name": "迪卢克",
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertEqual(len(payload["hk4e"]), 2)
+        self.assertEqual({section["uid"] for section in payload["hk4e"]}, {"10001", "10002"})
+
     def test_parse_uigf_accepts_versions_40_41_and_42(self):
         for version in ("v4.0", "v4.1", "v4.2"):
             with self.subTest(version=version):
@@ -128,6 +147,58 @@ class GachaUIGFTests(unittest.TestCase):
             parsed.records_by_game_and_uid["starrail"]["80001"][0].record_id,
             "2000001",
         )
+
+    def test_parse_uigf_keeps_multiple_uid_groups_for_same_game(self):
+        payload = {
+            "info": {
+                "export_timestamp": 1710000000,
+                "export_app": "test-suite",
+                "export_app_version": "1.0.0",
+                "version": "v4.2",
+            },
+            "hk4e": [
+                {
+                    "uid": "10001",
+                    "timezone": 8,
+                    "lang": "zh-cn",
+                    "list": [
+                        {
+                            "uigf_gacha_type": "301",
+                            "gacha_type": "301",
+                            "item_id": "",
+                            "count": "1",
+                            "time": "2026-03-18 12:00:00",
+                            "name": "刻晴",
+                            "item_type": "角色",
+                            "rank_type": "5",
+                            "id": "1000001",
+                        }
+                    ],
+                },
+                {
+                    "uid": "10002",
+                    "timezone": 8,
+                    "lang": "zh-cn",
+                    "list": [
+                        {
+                            "uigf_gacha_type": "301",
+                            "gacha_type": "301",
+                            "item_id": "",
+                            "count": "1",
+                            "time": "2026-03-18 11:59:00",
+                            "name": "迪卢克",
+                            "item_type": "角色",
+                            "rank_type": "5",
+                            "id": "1000002",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        parsed = parse_uigf(payload)
+
+        self.assertEqual(set(parsed.records_by_game_and_uid["genshin"].keys()), {"10001", "10002"})
 
     def test_parse_uigf_accepts_raw_json_text(self):
         payload = json.dumps(

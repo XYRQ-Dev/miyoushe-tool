@@ -2,19 +2,18 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.models.account import GameRole, MihoyoAccount
 from app.models.user import User
 from app.schemas.redeem import RedeemExecuteRequest
 from app.utils.crypto import encrypt_cookie
+from tests.mysql_test_case import MySqlIsolatedAsyncioTestCase
 
 
 class FakeRedeemResponse:
@@ -47,22 +46,7 @@ class FakeRedeemAsyncClient:
         return self._response
 
 
-class RedeemTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        self.session_factory = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    async def asyncTearDown(self):
-        await self.engine.dispose()
-
-    async def _new_session(self):
-        return self.session_factory()
+class RedeemTests(MySqlIsolatedAsyncioTestCase):
 
     async def _create_user(self, session: AsyncSession, username: str) -> User:
         user = User(username=username, password_hash="x", role="user", is_active=True)
@@ -431,46 +415,6 @@ class RedeemTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.exception.status_code, 404)
         self.assertIn("账号不存在", context.exception.detail)
         self.assertEqual(batch_total, 0)
-
-    async def test_ensure_redeem_columns_adds_error_count_for_legacy_database(self):
-        from sqlalchemy import text
-
-        from app.database import ensure_redeem_columns
-
-        legacy_engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        try:
-            async with legacy_engine.begin() as conn:
-                await conn.execute(text("""
-                    CREATE TABLE redeem_batches (
-                        id INTEGER PRIMARY KEY,
-                        user_id INTEGER NOT NULL,
-                        account_count INTEGER DEFAULT 0,
-                        game VARCHAR(20) NOT NULL,
-                        code VARCHAR(100) NOT NULL,
-                        success_count INTEGER DEFAULT 0,
-                        already_redeemed_count INTEGER DEFAULT 0,
-                        invalid_code_count INTEGER DEFAULT 0,
-                        invalid_cookie_count INTEGER DEFAULT 0,
-                        failed_count INTEGER DEFAULT 0,
-                        message TEXT,
-                        created_at DATETIME
-                    )
-                """))
-
-            await ensure_redeem_columns(legacy_engine)
-
-            async with legacy_engine.begin() as conn:
-                columns = await conn.exec_driver_sql("PRAGMA table_info(redeem_batches)")
-                column_names = {row[1] for row in columns.fetchall()}
-
-            self.assertIn("error_count", column_names)
-        finally:
-            await legacy_engine.dispose()
-
 
 if __name__ == "__main__":
     unittest.main()

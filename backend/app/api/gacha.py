@@ -38,8 +38,13 @@ async def import_gacha_records(
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    account = await service.get_owned_account_for_game(data.account_id, current_user.id, data.game)
-    return await service.import_records(account=account, game=data.game, import_url=data.import_url)
+    account = await service.get_owned_account_for_game(data.account_id, current_user.id, data.game, data.game_uid)
+    return await service.import_records(
+        account=account,
+        game=data.game,
+        game_uid=data.game_uid,
+        import_url=data.import_url,
+    )
 
 
 @router.post("/import-from-account", response_model=GachaImportResponse)
@@ -49,8 +54,8 @@ async def import_gacha_records_from_account(
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    account = await service.get_owned_account(data.account_id, current_user.id)
-    return await service.import_records_from_account(account=account, game=data.game)
+    account = await service.get_owned_account_for_game(data.account_id, current_user.id, data.game, data.game_uid)
+    return await service.import_records_from_account(account=account, game=data.game, game_uid=data.game_uid)
 
 
 @router.post("/import-uigf", response_model=GachaImportResponse)
@@ -63,7 +68,7 @@ async def import_gacha_records_from_uigf(
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    account = await service.get_owned_account_for_game(data.account_id, current_user.id, data.game)
+    account = await service.get_owned_account_for_game(data.account_id, current_user.id, data.game, data.game_uid)
     return await service.import_records_from_uigf(account=account, game=data.game, request=data)
 
 
@@ -73,18 +78,20 @@ async def get_gacha_summary(
     # 这里故意保留为 `str`，不在路由层用枚举提前做 422 校验。
     # 所有入口统一下沉到 service 层做同一套 400 业务错误，才能让 HTTP 与内部调用的语义一致。
     game: str = Query(...),
+    game_uid: str = Query(..., min_length=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    await service.get_owned_account_for_game(account_id, current_user.id, game)
-    return await service.get_summary(account_id=account_id, game=game)
+    await service.get_owned_account_for_game(account_id, current_user.id, game, game_uid)
+    return await service.get_summary(account_id=account_id, game=game, game_uid=game_uid)
 
 
 @router.get("/records", response_model=GachaRecordListResponse)
 async def get_gacha_records(
     account_id: int = Query(..., ge=1),
     game: str = Query(...),
+    game_uid: str = Query(..., min_length=1),
     pool_type: str | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -92,10 +99,11 @@ async def get_gacha_records(
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    await service.get_owned_account_for_game(account_id, current_user.id, game)
+    await service.get_owned_account_for_game(account_id, current_user.id, game, game_uid)
     return await service.list_records(
         account_id=account_id,
         game=game,
+        game_uid=game_uid,
         pool_type=pool_type,
         page=page,
         page_size=page_size,
@@ -109,21 +117,23 @@ async def get_gacha_records(
 async def export_gacha_records_uigf(
     account_id: int = Query(..., ge=1),
     game: str = Query(...),
+    game_uid: str = Query(..., min_length=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    await service.get_owned_account_for_game(account_id, current_user.id, game)
-    return await service.export_records(account_id=account_id, game=game)
+    await service.get_owned_account_for_game(account_id, current_user.id, game, game_uid)
+    return await service.export_records(account_id=account_id, game=game, game_uid=game_uid)
 
 
 @router.delete("/reset", response_model=GachaResetResponse)
 async def reset_gacha_records(
     account_id: int = Query(..., ge=1),
     game: str = Query(...),
+    game_uid: str = Query(..., min_length=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     service = GachaService(db)
-    await service.get_owned_account_for_game(account_id, current_user.id, game)
-    return await service.reset_records(account_id=account_id, game=game)
+    await service.get_owned_account_for_game(account_id, current_user.id, game, game_uid)
+    return await service.reset_records(account_id=account_id, game=game, game_uid=game_uid)

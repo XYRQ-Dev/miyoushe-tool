@@ -29,10 +29,10 @@ def utc_now() -> datetime:
 
 def utc_now_naive() -> datetime:
     """
-    返回按 UTC 解释的无时区当前时间，供当前 SQLite 模型落库使用。
+    返回按 UTC 解释的无时区当前时间，供当前 ORM 的 `DateTime` 字段落库使用。
 
-    现有数据库字段大多仍是无时区 `DateTime`，直接写 aware datetime
-    会带来 ORM / 驱动兼容差异；这里显式去掉 tzinfo，保持现有存储约定不变。
+    当前模型层仍把时间统一存成“按 UTC 解释的无时区值”。
+    这里显式去掉 tzinfo，是为了让写入约定和查询换算都只收口在这一层，避免各模块自己猜时区。
     """
     return utc_now().replace(tzinfo=None)
 

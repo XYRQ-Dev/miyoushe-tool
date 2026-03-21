@@ -130,7 +130,8 @@ class RedeemService:
 
         pending_executions: list[PendingExecution] = []
         # 先把所有上游调用完成，再开启写事务落批次和明细。
-        # 这是 SQLite 下非常关键的边界：如果写事务跨网络调用，整个服务会更容易出现 database is locked。
+        # 这里不能把数据库事务跨到网络调用外面，否则上游慢请求会平白拉长锁持有时间，
+        # 后续批量兑换和历史查询会更难判断到底是业务失败还是事务边界设计有问题。
         async with httpx.AsyncClient(timeout=20) as client:
             for account_id in account_ids:
                 account = accounts[account_id]

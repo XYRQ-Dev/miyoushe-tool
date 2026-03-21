@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
 from app.api import accounts as accounts_api
 from app.models.user import User

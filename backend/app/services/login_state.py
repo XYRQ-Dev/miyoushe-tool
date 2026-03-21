@@ -17,7 +17,6 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import ensure_account_columns
 from app.models.account import MihoyoAccount
 from app.models.user import User
 from app.services.account_credentials import AccountCredentialService
@@ -116,7 +115,6 @@ class LoginStateService:
         return {"state": "expired", "message": f"Cookie 校验失败（code: {retcode}）"}
 
     async def refresh_account_login_state(self, account: MihoyoAccount) -> dict[str, Any]:
-        await ensure_account_columns(self.db.bind)
         previous_status = account.cookie_status
         now = utc_now_naive()
         account.last_refresh_attempt_at = now

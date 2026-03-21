@@ -17,6 +17,10 @@ class GachaImportRequest(BaseModel):
     # 实际合法性统一交给 service 层 `_ensure_supported_game()` 收口，这样函数直调、HTTP 请求、
     # 以及未来可能增加的内部任务入口都共享同一份 400 业务错误口径。
     game: str
+    # 抽卡链路现在必须显式绑定到角色 UID。
+    # 这里不能再靠“从链接里猜”或“默认取第一个角色”兜底，否则前端当前选中的角色与后端真正落库的角色
+    # 可能不是同一个，最终会出现导入成功但明细/导出看不到、或者清空时误删另一个 UID 数据的问题。
+    game_uid: str = Field(min_length=1, description="当前操作绑定的游戏角色 UID")
     import_url: str = Field(min_length=10, description="从游戏或工具中复制的完整抽卡记录链接")
 
 
@@ -26,12 +30,14 @@ class GachaImportFromAccountRequest(BaseModel):
     # 这样“当前仅支持原神账号自动导入”会继续由 service 层统一返回 400，
     # 而不会因为 FastAPI/Pydantic 先拦截成 422，破坏整个抽卡模块现有的错误语义一致性。
     game: str
+    game_uid: str = Field(min_length=1, description="当前操作绑定的游戏角色 UID")
 
 
 class GachaImportResponse(BaseModel):
     import_id: int
     account_id: int
     game: SupportedGachaGame
+    game_uid: str
     fetched_count: int
     inserted_count: int
     duplicate_count: int
@@ -44,6 +50,7 @@ class GachaImportUIGFRequest(BaseModel):
     # 同上：请求模型不在 schema 层把 `game` 限死，避免真实 HTTP 流量被框架先转成 422。
     # UIGF 导入最终仍会被 service 层按统一规则校验成 400，从而保证与 URL 导入、查询、导出一致。
     game: str
+    game_uid: str = Field(min_length=1, description="当前操作绑定的游戏角色 UID")
     # `source_name` 只用于生成脱敏后的导入来源摘要，不能被误解成可信文件路径。
     # 这里保留原始文件名语义，是为了让运维和用户能从导入历史里定位“用了哪份备份”，
     # 但落库前必须转成 `uigf://` 语义，避免后续维护者又把它当成本地文件路径或 URL 去拼接处理。
@@ -65,6 +72,9 @@ class GachaPoolSummary(BaseModel):
 
 
 class GachaSummaryResponse(BaseModel):
+    account_id: int
+    game: SupportedGachaGame
+    game_uid: str
     total_count: int
     five_star_count: int
     four_star_count: int
@@ -75,6 +85,7 @@ class GachaSummaryResponse(BaseModel):
 
 class GachaRecordResponse(BaseModel):
     id: int
+    game_uid: str
     record_id: str
     pool_type: str
     pool_name: str | None = None
@@ -88,8 +99,18 @@ class GachaRecordResponse(BaseModel):
 
 
 class GachaRecordListResponse(BaseModel):
+    account_id: int
+    game: SupportedGachaGame
+    game_uid: str
     records: list[GachaRecordResponse]
     total: int
+
+
+class GachaRoleOption(BaseModel):
+    game: SupportedGachaGame
+    game_uid: str
+    nickname: str | None = None
+    region: str | None = None
 
 
 class GachaAccountOption(BaseModel):
@@ -97,6 +118,7 @@ class GachaAccountOption(BaseModel):
     nickname: str | None = None
     mihoyo_uid: str | None = None
     supported_games: list[SupportedGachaGame]
+    gacha_roles: list[GachaRoleOption]
 
 
 class GachaAccountListResponse(BaseModel):
@@ -107,6 +129,7 @@ class GachaAccountListResponse(BaseModel):
 class GachaExportResponse(BaseModel):
     account_id: int
     game: SupportedGachaGame
+    game_uid: str
     exported_at: datetime
     total: int
     # 导出响应改为直接返回 UIGF 对象，而不是仓库私有的 `records` 扁平数组。
@@ -117,6 +140,7 @@ class GachaExportResponse(BaseModel):
 class GachaResetResponse(BaseModel):
     account_id: int
     game: SupportedGachaGame
+    game_uid: str
     deleted_records: int
     deleted_import_jobs: int
     message: str

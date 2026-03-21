@@ -4,7 +4,7 @@
       <div class="page-title-group">
         <div class="page-kicker">Asset Archive</div>
         <h2 class="page-title">抽卡记录中心</h2>
-        <p class="page-desc">选择账号与游戏后，可手贴完整抽卡链接；原神还支持从账号自动导入，也可导入或导出 UIGF 备份。</p>
+        <p class="page-desc">选择账号、游戏和角色 UID 后，可手贴完整抽卡链接；原神还支持从账号自动导入，也可导入或导出 UIGF 备份。</p>
       </div>
       <div class="page-actions">
         <div class="soft-chip">{{ latestImportMessage }}</div>
@@ -53,6 +53,25 @@
                 :value="option.value"
               />
             </el-select>
+          </el-form-item>
+
+          <el-form-item label="角色 UID" class="field-block">
+            <el-select
+              v-model="selectedGameUid"
+              placeholder="请选择角色 UID"
+              :disabled="availableRoles.length === 0"
+              @change="handleRoleChange"
+            >
+              <el-option
+                v-for="role in availableRoles"
+                :key="role.game_uid"
+                :label="formatRoleLabel(role)"
+                :value="role.game_uid"
+              />
+            </el-select>
+            <div v-if="currentRole?.region" class="field-hint">
+              当前角色所在区服：{{ currentRole.region }}
+            </div>
           </el-form-item>
 
           <el-form-item label="完整导入链接" class="field-block field-block-wide">
@@ -104,7 +123,7 @@
           />
           <el-button
             plain
-            :disabled="!selectedAccountId || !selectedGame || isImportBusy"
+            :disabled="!selectedAccountId || !selectedGame || !selectedGameUid || isImportBusy"
             :loading="uigfImporting"
             @click="openUigfFilePicker"
           >
@@ -112,7 +131,7 @@
           </el-button>
           <el-button
             plain
-            :disabled="!selectedAccountId || !selectedGame || exporting"
+            :disabled="!selectedAccountId || !selectedGame || !selectedGameUid || exporting"
             :loading="exporting"
             @click="handleExportUigf"
           >
@@ -121,7 +140,7 @@
           <el-button
             type="danger"
             plain
-            :disabled="!selectedAccountId || !selectedGame || resetting"
+            :disabled="!selectedAccountId || !selectedGame || !selectedGameUid || resetting"
             :loading="resetting"
             @click="handleReset"
           >
@@ -262,9 +281,23 @@ import { Refresh, Upload } from '@element-plus/icons-vue'
 import { gachaApi } from '../api'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
 import { resolveRouteGamePrefill } from '../utils/gameRoutePrefill'
+import { formatGachaRoleLabel, resolveRouteGameUidPrefill } from '../utils/gameUidRoutePrefill'
 
 type GameOption = { value: string; label: string }
-type GachaAccount = { id: number; nickname?: string; mihoyo_uid?: string; supported_games: string[] }
+type GachaRole = {
+  game: string
+  game_uid: string
+  nickname?: string | null
+  region?: string | null
+}
+
+type GachaAccount = {
+  id: number
+  nickname?: string
+  mihoyo_uid?: string
+  supported_games: string[]
+  gacha_roles: GachaRole[]
+}
 
 const GAME_OPTIONS: Record<string, GameOption> = {
   genshin: { value: 'genshin', label: '原神' },
@@ -274,6 +307,7 @@ const GAME_OPTIONS: Record<string, GameOption> = {
 const accounts = ref<GachaAccount[]>([])
 const selectedAccountId = ref<number | null>(null)
 const selectedGame = ref('')
+const selectedGameUid = ref('')
 const importUrl = ref('')
 const importing = ref(false)
 const accountImporting = ref(false)
@@ -292,6 +326,7 @@ const uigfFileInput = useTemplateRef<HTMLInputElement>('uigfFileInput')
 const route = useRoute()
 const routeAccountPrefillConsumed = ref(false)
 const routeGamePrefillConsumed = ref(false)
+const routeGameUidPrefillConsumed = ref(false)
 
 const currentAccount = computed(() => (
   accounts.value.find((account) => account.id === selectedAccountId.value) || null
@@ -304,6 +339,27 @@ const availableGames = computed(() => {
     .filter(Boolean)
 })
 
+const availableRoles = computed(() => {
+  if (!currentAccount.value || !selectedGame.value) return []
+
+  const roleMap = new Map<string, GachaRole>()
+  currentAccount.value.gacha_roles.forEach((role) => {
+    const normalizedGameUid = String(role.game_uid || '').trim()
+    if (!normalizedGameUid || role.game !== selectedGame.value || roleMap.has(normalizedGameUid)) {
+      return
+    }
+    roleMap.set(normalizedGameUid, {
+      ...role,
+      game_uid: normalizedGameUid,
+    })
+  })
+  return Array.from(roleMap.values())
+})
+
+const currentRole = computed(() => (
+  availableRoles.value.find((role) => role.game_uid === selectedGameUid.value) || null
+))
+
 // 当前后端只支持原神通过账号根凭据生成 authkey 自动导入。
 // 星铁仍然只有“手贴链接 / UIGF 文件交换”两种入口；如果前端把按钮也放出来，
 // 用户会误以为后端已经支持星铁账号直连导入，排障时会被错误入口带偏。
@@ -312,32 +368,40 @@ const isImportBusy = computed(() => importing.value || accountImporting.value ||
 const canImportFromAccount = computed(() => Boolean(
   selectedAccountId.value &&
   showImportFromAccount.value &&
+  selectedGameUid.value &&
   !isImportBusy.value
 ))
 const importSectionDescription = computed(() => (
   showImportFromAccount.value
-    ? '原神可直接从账号自动导入，也支持手贴完整链接或导入 UIGF 备份。'
-    : '当前游戏支持手贴完整链接导入，以及导入或导出 UIGF 备份。'
+    ? '原神可直接从账号自动导入，也支持手贴完整链接或导入 UIGF 备份。所有操作都会绑定到当前 UID。'
+    : '当前游戏支持手贴完整链接导入，以及导入或导出 UIGF 备份。所有操作都会绑定到当前 UID。'
 ))
 const gameScopeHint = computed(() => (
-  showImportFromAccount.value
-    ? '原神支持三种入口：手贴链接、从账号自动导入、导入 UIGF。'
-    : '星穹铁道当前只提供手贴链接导入、导入 UIGF、导出 UIGF。'
+  currentRole.value
+    ? `${showImportFromAccount.value ? '原神支持三种入口：手贴链接、从账号自动导入、导入 UIGF。' : '星穹铁道当前只提供手贴链接导入、导入 UIGF、导出 UIGF。'} 当前角色：${formatRoleLabel(currentRole.value)}。`
+    : '当前账号游戏下还没有可用角色 UID，暂时无法请求抽卡数据。'
 ))
 const emptyRecordsDescription = computed(() => (
+  !selectedGameUid.value
+    ? '请先选择角色 UID，再查看该角色的抽卡记录'
+    :
   showImportFromAccount.value
     ? '暂无抽卡记录，先在上方导入完整链接、账号数据或 UIGF 备份'
     : '暂无抽卡记录，先在上方导入完整链接或 UIGF 备份'
 ))
 
 const canImport = computed(() => Boolean(
-  selectedAccountId.value && selectedGame.value && importUrl.value.trim() && !isImportBusy.value
+  selectedAccountId.value && selectedGame.value && selectedGameUid.value && importUrl.value.trim() && !isImportBusy.value
 ))
 
 function formatAccountLabel(account: GachaAccount) {
   return account.nickname
     ? `${account.nickname}${account.mihoyo_uid ? ` (${account.mihoyo_uid})` : ''}`
     : account.mihoyo_uid || `账号 ${account.id}`
+}
+
+function formatRoleLabel(role: GachaRole) {
+  return formatGachaRoleLabel(role)
 }
 
 function getRankTagType(rankType: string) {
@@ -350,6 +414,51 @@ function getPoolRatio(count: number) {
   const total = summary.value.total_count || 0
   if (!total) return 0
   return Math.max(8, Math.round((count / total) * 100))
+}
+
+function applyPreferredGameSelection() {
+  const account = currentAccount.value
+  if (!account) {
+    selectedGame.value = ''
+    return
+  }
+
+  const prefilledGame = resolveRouteGamePrefill(route.query.game, {
+    consumed: routeGamePrefillConsumed.value,
+    availableGames: account.supported_games || [],
+  })
+  routeGamePrefillConsumed.value = prefilledGame.consumed
+
+  if (prefilledGame.preferredGame !== null) {
+    // 角色资产页会同时带上账号和游戏上下文，抽卡页应优先落到该账号的对应游戏档案。
+    selectedGame.value = prefilledGame.preferredGame
+  } else if (!selectedGame.value || !account.supported_games.includes(selectedGame.value)) {
+    selectedGame.value = account.supported_games[0] || ''
+  }
+}
+
+function applyPreferredRoleSelection() {
+  const availableGameUids = availableRoles.value.map((role) => role.game_uid)
+  const prefilledRole = resolveRouteGameUidPrefill(route.query.game_uid, {
+    consumed: routeGameUidPrefillConsumed.value,
+    availableGameUids,
+  })
+  routeGameUidPrefillConsumed.value = prefilledRole.consumed
+
+  if (prefilledRole.preferredGameUid !== null) {
+    // query 中显式带入了 game_uid 时，抽卡页要优先消费这份上下文，
+    // 这样从角色资产页进入后才能直接落到目标角色，而不是落到同账号同游戏下的其他 UID。
+    selectedGameUid.value = prefilledRole.preferredGameUid
+    return
+  }
+
+  if (!availableGameUids.includes(selectedGameUid.value)) {
+    // 如果 query 中的 game_uid 不属于当前账号游戏角色，或账号 / 游戏切换后旧 UID 已失效，
+    // 必须回退到当前账号游戏下的第一个合法 UID。
+    // 这里不能继续保留失效 UID，更不能把请求偷偷放大成“按账号 + 游戏聚合”，
+    // 否则 summary / records / export / reset / import 都可能落到错误角色，排障时还很难看出真正的错位来源。
+    selectedGameUid.value = availableGameUids[0] || ''
+  }
 }
 
 async function loadAccounts() {
@@ -368,35 +477,25 @@ async function loadAccounts() {
     selectedAccountId.value = accounts.value[0].id
   }
 
-  const account = accounts.value.find((item) => item.id === selectedAccountId.value)
-  const prefilledGame = resolveRouteGamePrefill(route.query.game, {
-    consumed: routeGamePrefillConsumed.value,
-    availableGames: account?.supported_games || [],
-  })
-  routeGamePrefillConsumed.value = prefilledGame.consumed
-
-  if (prefilledGame.preferredGame !== null) {
-    // 角色资产页会同时带上账号和游戏上下文，抽卡页应优先落到该账号的对应游戏档案。
-    selectedGame.value = prefilledGame.preferredGame
-  } else if (account && (!selectedGame.value || !account.supported_games.includes(selectedGame.value))) {
-    selectedGame.value = account.supported_games[0] || ''
-  }
+  applyPreferredGameSelection()
+  applyPreferredRoleSelection()
 }
 
 async function loadSummary() {
-  if (!selectedAccountId.value || !selectedGame.value) {
+  if (!selectedAccountId.value || !selectedGame.value || !selectedGameUid.value) {
     summary.value = { pool_summaries: [] }
     return
   }
   const { data } = await gachaApi.getSummary({
     account_id: selectedAccountId.value,
     game: selectedGame.value,
+    game_uid: selectedGameUid.value,
   })
   summary.value = data
 }
 
 async function loadRecords() {
-  if (!selectedAccountId.value || !selectedGame.value) {
+  if (!selectedAccountId.value || !selectedGame.value || !selectedGameUid.value) {
     records.value = []
     recordTotal.value = 0
     return
@@ -407,6 +506,7 @@ async function loadRecords() {
     const { data } = await gachaApi.listRecords({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
+      game_uid: selectedGameUid.value,
       pool_type: poolFilter.value,
       page: currentPage.value,
       page_size: pageSize,
@@ -418,9 +518,13 @@ async function loadRecords() {
   }
 }
 
+async function loadScopedData() {
+  await Promise.all([loadSummary(), loadRecords()])
+}
+
 async function loadPageData() {
   await loadAccounts()
-  await Promise.all([loadSummary(), loadRecords()])
+  await loadScopedData()
 }
 
 async function refreshAfterImport(message: string, successMessage: string) {
@@ -428,7 +532,7 @@ async function refreshAfterImport(message: string, successMessage: string) {
   ElMessage.success(successMessage)
   currentPage.value = 1
   poolFilter.value = undefined
-  await Promise.all([loadSummary(), loadRecords()])
+  await loadScopedData()
 }
 
 async function handleImport() {
@@ -438,6 +542,7 @@ async function handleImport() {
     const { data } = await gachaApi.import({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
+      game_uid: selectedGameUid.value,
       import_url: importUrl.value.trim(),
     })
     importUrl.value = ''
@@ -451,13 +556,14 @@ async function handleImport() {
 }
 
 async function handleImportFromAccount() {
-  if (!selectedAccountId.value || selectedGame.value !== 'genshin') return
+  if (!selectedAccountId.value || !selectedGameUid.value || selectedGame.value !== 'genshin') return
 
   accountImporting.value = true
   try {
     const { data } = await gachaApi.importFromAccount({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
+      game_uid: selectedGameUid.value,
     })
     await refreshAfterImport(
       `账号自动导入新增 ${data.inserted_count} 条，跳过重复 ${data.duplicate_count} 条`,
@@ -475,7 +581,7 @@ function openUigfFilePicker() {
 async function handleUigfFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file || !selectedAccountId.value || !selectedGame.value) {
+  if (!file || !selectedAccountId.value || !selectedGame.value || !selectedGameUid.value) {
     input.value = ''
     return
   }
@@ -489,6 +595,7 @@ async function handleUigfFileChange(event: Event) {
     const { data } = await gachaApi.importUigf({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
+      game_uid: selectedGameUid.value,
       source_name: file.name,
       uigf_json: text,
     })
@@ -507,20 +614,21 @@ async function handleUigfFileChange(event: Event) {
 }
 
 async function handleExportUigf() {
-  if (!selectedAccountId.value || !selectedGame.value) return
+  if (!selectedAccountId.value || !selectedGame.value || !selectedGameUid.value) return
 
   exporting.value = true
   try {
     const { data } = await gachaApi.exportUigf({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
+      game_uid: selectedGameUid.value,
     })
 
     const blob = new Blob([JSON.stringify(data.uigf, null, 2)], { type: 'application/json;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `uigf-${selectedGame.value}-account-${selectedAccountId.value}.json`
+    link.download = `uigf-${selectedGame.value}-uid-${selectedGameUid.value}-account-${selectedAccountId.value}.json`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -532,14 +640,15 @@ async function handleExportUigf() {
 }
 
 async function handleReset() {
-  if (!selectedAccountId.value || !selectedGame.value) return
+  if (!selectedAccountId.value || !selectedGame.value || !selectedGameUid.value) return
 
   const accountLabel = currentAccount.value
     ? formatAccountLabel(currentAccount.value as GachaAccount)
     : `账号 ${selectedAccountId.value}`
+  const roleLabel = currentRole.value ? formatRoleLabel(currentRole.value) : `UID ${selectedGameUid.value}`
   try {
     await ElMessageBox.confirm(
-      `将删除账号“${accountLabel}”在当前游戏下的全部抽卡记录和导入历史，且不可恢复。`,
+      `将删除账号“${accountLabel}”在当前角色“${roleLabel}”下的全部抽卡记录和导入历史，且不可恢复。`,
       '重置当前抽卡数据',
       {
         type: 'warning',
@@ -557,12 +666,13 @@ async function handleReset() {
     const { data } = await gachaApi.reset({
       account_id: selectedAccountId.value,
       game: selectedGame.value,
+      game_uid: selectedGameUid.value,
     })
     latestImportMessage.value = '当前抽卡数据已重置'
     ElMessage.success(data.message || '抽卡记录已重置')
     currentPage.value = 1
     poolFilter.value = undefined
-    await Promise.all([loadSummary(), loadRecords()])
+    await loadScopedData()
   } finally {
     resetting.value = false
   }
@@ -571,17 +681,22 @@ async function handleReset() {
 function handleAccountChange() {
   currentPage.value = 1
   poolFilter.value = undefined
-  const account = currentAccount.value
-  if (account && !account.supported_games.includes(selectedGame.value)) {
-    selectedGame.value = account.supported_games[0] || ''
-  }
-  loadPageData()
+  applyPreferredGameSelection()
+  applyPreferredRoleSelection()
+  loadScopedData()
 }
 
 function handleGameChange() {
   currentPage.value = 1
   poolFilter.value = undefined
-  loadPageData()
+  applyPreferredRoleSelection()
+  loadScopedData()
+}
+
+function handleRoleChange() {
+  currentPage.value = 1
+  poolFilter.value = undefined
+  loadScopedData()
 }
 
 function handlePoolChange() {

@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # 容器部署再通过 docker-compose 显式覆盖成 `@mysql:3306`。
     DATABASE_URL: str = "mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4"
 
+    # 这里只在配置层暴露测试库变量名，方便部署文档、排障日志和 IDE 自动补全看到它。
+    # 该变量只服务 MySQL-only 测试基座；不要再把它理解成“任何临时数据库都能塞进去”的兜底入口。
+    # 统一测试基座不能直接读取 `settings.TEST_DATABASE_URL`，因为 `settings` 会在 import 时缓存环境快照；
+    # 而单测需要在同一进程里反复 patch 环境变量验证“缺失/非法必须失败”，因此测试代码必须直接读 `os.environ`。
+    TEST_DATABASE_URL: str = ""
+
     # Cookie 加密密钥。
     # 这里保留随机默认值仅用于让旧测试与最小启动路径不至于直接崩溃；
     # 真实部署必须通过 `.env` 或环境变量显式固定，否则服务重启后旧密文会无法解密。

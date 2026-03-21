@@ -6,6 +6,10 @@ import { applyAuthorizationHeader } from '../src/api/authHeader.ts'
 import { resolveRouteAccountPrefill } from '../src/utils/accountRoutePrefill.ts'
 import { resolveRouteGamePrefill } from '../src/utils/gameRoutePrefill.ts'
 import {
+  formatGachaRoleLabel,
+  resolveRouteGameUidPrefill,
+} from '../src/utils/gameUidRoutePrefill.ts'
+import {
   getMenuDenyTarget,
   getVisibleMenus,
   hasMenuAccess,
@@ -81,6 +85,39 @@ const shouldNotReplayGameAfterEmptyLoad = resolveRouteGamePrefill('starrail', {
 })
 assert.deepEqual(shouldNotReplayGameAfterEmptyLoad, { preferredGame: null, consumed: true })
 
+const firstUidLoad = resolveRouteGameUidPrefill('10001', {
+  consumed: false,
+  availableGameUids: ['10001', '10002'],
+})
+assert.deepEqual(firstUidLoad, { preferredGameUid: '10001', consumed: true })
+
+const invalidUid = resolveRouteGameUidPrefill('99999', {
+  consumed: false,
+  availableGameUids: ['10001', '10002'],
+})
+assert.deepEqual(invalidUid, { preferredGameUid: null, consumed: true })
+
+const emptyUidOnFirstLoad = resolveRouteGameUidPrefill('10001', {
+  consumed: false,
+  availableGameUids: [],
+})
+assert.deepEqual(emptyUidOnFirstLoad, { preferredGameUid: null, consumed: true })
+
+const shouldNotReplayUidAfterEmptyLoad = resolveRouteGameUidPrefill('10001', {
+  consumed: emptyUidOnFirstLoad.consumed,
+  availableGameUids: ['10001', '10002'],
+})
+assert.deepEqual(shouldNotReplayUidAfterEmptyLoad, { preferredGameUid: null, consumed: true })
+
+assert.equal(
+  formatGachaRoleLabel({ nickname: '荧', game_uid: '10001' }),
+  '荧 (10001)',
+)
+assert.equal(
+  formatGachaRoleLabel({ nickname: '', game_uid: '10001' }),
+  '10001 (10001)',
+)
+
 assert.equal(APP_MENUS.some((item) => item.key === 'admin_menu_management'), true)
 assert.equal(
   APP_MENUS.some((item) => item.key === 'notes'),
@@ -127,6 +164,106 @@ assert.equal(
   healthCenterView.includes('notes_auth_status'),
   false,
   'HealthCenter.vue 不应继续渲染已下线的便笺状态字段',
+)
+assertSourceMatches(
+  healthCenterView,
+  /supported_games\.length === 1[\s\S]*query\.game = account\.supported_games\[0\]/,
+  'HealthCenter.vue 在拿不到角色 UID 时，至多只能把单游戏账号安全预填到游戏维度',
+)
+assertSourceMatches(
+  healthCenterView,
+  /不伪造不存在的角色 UID|不伪造.*game_uid/,
+  'HealthCenter.vue 需要用中文维护注释解释为何不能在账号级响应上伪造 game_uid',
+)
+
+const gachaApiSource = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../src/api/index.ts'),
+  'utf8',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /import:\s*\(data:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>\s*api\.post\('\/gacha\/import'/,
+  'gachaApi.import 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /importFromAccount:\s*\(data:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>\s*api\.post\('\/gacha\/import-from-account'/,
+  'gachaApi.importFromAccount 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /importUigf:\s*\(data:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>\s*api\.post\('\/gacha\/import-uigf'/,
+  'gachaApi.importUigf 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /getSummary:\s*\(params:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>/,
+  'gachaApi.getSummary 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /listRecords:\s*\(params:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>/,
+  'gachaApi.listRecords 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /exportUigf:\s*\(params:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>/,
+  'gachaApi.exportUigf 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /exportJson:\s*\(params:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>/,
+  'gachaApi.exportJson 必须要求 game_uid',
+)
+assertSourceMatches(
+  gachaApiSource,
+  /reset:\s*\(params:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>/,
+  'gachaApi.reset 必须要求 game_uid',
+)
+
+const gachaRecordsView = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../src/views/GachaRecords.vue'),
+  'utf8',
+)
+assert.equal(
+  gachaRecordsView.includes("const selectedGameUid = ref('')"),
+  true,
+  'GachaRecords.vue 需要维护 selectedGameUid 状态',
+)
+assert.equal(
+  gachaRecordsView.includes('const availableRoles = computed(() =>'),
+  true,
+  'GachaRecords.vue 需要维护当前账号游戏下的 availableRoles',
+)
+assert.equal(
+  gachaRecordsView.includes('const currentRole = computed(() =>'),
+  true,
+  'GachaRecords.vue 需要维护当前选中角色 currentRole',
+)
+assert.equal(
+  gachaRecordsView.includes('resolveRouteGameUidPrefill(route.query.game_uid'),
+  true,
+  'GachaRecords.vue 需要消费 query 中的 game_uid 预填',
+)
+assertSourceMatches(
+  gachaRecordsView,
+  /query 中显式带入了 game_uid|回退到当前账号游戏下的第一个合法 UID/,
+  'GachaRecords.vue 需要用中文维护注释解释 UID 预填与回退的原因、边界和误改风险',
+)
+assert.equal(
+  (gachaRecordsView.match(/game_uid:\s*selectedGameUid\.value/g) || []).length >= 7,
+  true,
+  'GachaRecords.vue 的所有抽卡请求都必须透传 selectedGameUid',
+)
+
+const roleAssetsView = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../src/views/RoleAssets.vue'),
+  'utf8',
+)
+assertSourceMatches(
+  roleAssetsView,
+  /query:\s*\{[\s\S]*account_id:\s*String\(accountId\),[\s\S]*game,[\s\S]*game_uid:\s*gameUid/,
+  'RoleAssets.vue 跳转到抽卡页时必须透传 role.game_uid',
 )
 
 const routerSource = fs.readFileSync(

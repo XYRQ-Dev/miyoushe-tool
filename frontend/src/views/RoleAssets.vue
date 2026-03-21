@@ -153,7 +153,7 @@
                     size="small"
                     plain
                     :disabled="!role.supported_assets.includes('gacha')"
-                    @click="jumpToGacha(account.account_id, role.game)"
+                    @click="jumpToGacha(account.account_id, role.game, role.game_uid)"
                   >
                     抽卡记录
                   </el-button>
@@ -330,12 +330,16 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString('zh-CN')
 }
 
-function jumpToGacha(accountId: number, game: string) {
+function jumpToGacha(accountId: number, game: string, gameUid: string) {
   router.push({
     path: '/gacha',
     query: {
       account_id: String(accountId),
       game,
+      // 角色资产页已经掌握了最精确的角色上下文，这里必须把 `game_uid` 一并透传到抽卡页。
+      // 如果误删该字段，拥有多个同游戏角色的账号会在抽卡页默认落到首个 UID，
+      // 用户看到的统计、导出和重置对象都会与点击的角色卡片不一致。
+      game_uid: gameUid,
     },
   })
 }

@@ -55,8 +55,6 @@ class SystemSettingsService:
         return any(
             token in message
             for token in (
-                "no such table",
-                "no such column",
                 "unknown column",
                 "doesn't exist",
             )
@@ -79,10 +77,10 @@ class SystemSettingsService:
 
     async def ensure_table_exists(self) -> None:
         """
-        为旧部署补建 system_settings 表。
+        为旧部署补建 `system_settings` 表。
 
-        本项目历史上没有迁移工具，线上很多实例是直接在旧 SQLite 库上升级代码。
-        如果这里只依赖应用启动时的 `create_all()`，一旦进程未完全重启或旧库未补表，
+        本项目历史上存在“先升级代码、后补数据库结构”的部署方式。
+        如果这里只依赖应用启动时的 `create_all()`，一旦旧实例没有补上这张表，
         首次访问签到接口就会直接 500。这里按需补建，确保接口层对旧库具备自愈能力。
         """
         async with self.db.bind.begin() as conn:
@@ -97,8 +95,6 @@ class SystemSettingsService:
         都会因为 ORM 映射里带着新列而直接报错，导致管理员配置页和登录态恢复一起失效。
         """
         async with self.db.bind.begin() as conn:
-            dialect_name = conn.dialect.name
-
             def _load_columns(sync_conn):
                 inspector = inspect(sync_conn)
                 if not inspector.has_table(SystemSetting.__tablename__):
@@ -111,9 +107,8 @@ class SystemSettingsService:
                 return
 
             if "menu_visibility_json" not in existing_columns:
-                column_type = "TEXT" if dialect_name == "sqlite" else "LONGTEXT"
                 await conn.exec_driver_sql(
-                    f"ALTER TABLE {SystemSetting.__tablename__} ADD COLUMN menu_visibility_json {column_type}"
+                    f"ALTER TABLE {SystemSetting.__tablename__} ADD COLUMN menu_visibility_json LONGTEXT"
                 )
 
     def _build_default_config(self) -> SystemSetting:
@@ -131,6 +126,33 @@ class SystemSettingsService:
             menu_visibility_json=serialize_menu_visibility(normalize_menu_visibility(None)),
             updated_at=utc_now_naive(),
         )
+
+    def _session_has_pending_state(self) -> bool:
+        """
+        判断当前业务 session 是否挂着尚未提交的其它改动。
+
+        MySQL 默认可重复读隔离级别下，若当前事务已经开启，再用独立事务插入 `system_settings`，
+        当前 session 后续查询往往仍看不到那一行；但如果这里直接提交当前 session，
+        又会把调用方尚未确认的业务改动一并提前落库。
+
+        因此这里必须先区分：
+        - 干净 session：允许直接在当前事务内创建并提交，保证同 session 立刻可见
+        - 脏 session：继续走隔离事务，守住“不提前提交无关业务数据”的边界
+        """
+        return bool(self.db.new or self.db.dirty or self.db.deleted)
+
+    async def _persist_default_config_in_current_session(self) -> SystemSetting:
+        """
+        在当前干净 session 中创建默认配置。
+
+        只有确认 session 不存在其它待提交实体时，才允许直接 commit 当前事务；
+        否则会破坏调用方对事务边界的预期。
+        """
+        config = self._build_default_config()
+        self.db.add(config)
+        await self.db.commit()
+        await self.db.refresh(config)
+        return config
 
     async def _persist_default_config_in_isolated_session(self) -> SystemSetting:
         """
@@ -182,6 +204,11 @@ class SystemSettingsService:
         except (OperationalError, ProgrammingError) as exc:
             if not self._is_missing_storage_error(exc):
                 raise
+            # 这里必须先回滚当前 session，再去另一条连接上执行补表/补列 DDL。
+            # 否则本次失败查询留下的事务上下文仍会持有旧表的 metadata lock，
+            # 后续 `ALTER TABLE system_settings ...` 在 MySQL 下会一直等待自己释放锁，
+            # 表面现象就是“legacy 补列接口卡死”，实际根因是恢复 DDL 被当前事务反向阻塞。
+            await self.db.rollback()
             await self.ensure_storage_ready(force=True)
             with self.db.no_autoflush:
                 result = await self.db.execute(
@@ -192,7 +219,10 @@ class SystemSettingsService:
         if config is not None:
             return config
 
-        persisted_config = await self._persist_default_config_in_isolated_session()
+        if self._session_has_pending_state():
+            persisted_config = await self._persist_default_config_in_isolated_session()
+        else:
+            persisted_config = await self._persist_default_config_in_current_session()
         return await self.db.merge(persisted_config, load=False)
 
     async def get_menu_visibility(self) -> AdminMenuVisibilityResponse:
