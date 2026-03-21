@@ -1,9 +1,9 @@
 """
 数据库连接管理
 
-生产部署现在以 MySQL 8 为默认目标库，但测试与一次性迁移工具仍会显式使用 SQLite。
-因此这里不能把某一种方言写死，而要把“URL 规范化”和“引擎参数分支”收口到同一处，
-避免部署、脚本、单测各自拼接连接串，后续再出现“应用能连、脚本却连不上”的漂移。
+当前运行时已经冻结为 MySQL-only。
+这里必须把“只接受 `mysql+asyncmy://` 系列连接串”收口在同一处，
+避免调用方继续靠 SQLite 回退或驱动自动替换侥幸启动，最后让测试环境和正式部署再次分叉。
 """
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -14,33 +14,33 @@ from app.config import settings
 
 def normalize_database_url(database_url: str) -> str:
     """
-    把外部传入的数据库连接串统一转换为当前项目可直接使用的异步 URL。
+    把外部传入的数据库连接串统一转换为当前项目可直接使用的 MySQL 异步 URL。
 
     约束说明：
-    1. 生产默认要求 MySQL 异步驱动 `mysql+asyncmy://`
-    2. 测试与 SQLite 源库迁移仍允许显式传入 SQLite URL
-    3. 这里统一转换，避免调用方误传 `mysql://` / `mysql+pymysql://` 导致运行期才报方言不匹配
+    1. 运行时与测试基座都只允许 MySQL 异步驱动 `mysql+asyncmy://`
+    2. 历史 SQLite 只允许被独立迁移脚本以文件方式读取，不能再作为应用数据库 URL 混入运行期
+    3. 这里统一转换 `mysql://` / `mysql+pymysql://`，避免调用方误以为同步驱动仍被支持
     """
     normalized = database_url.strip()
     if normalized.startswith("mysql://"):
         return normalized.replace("mysql://", "mysql+asyncmy://", 1)
     if normalized.startswith("mysql+pymysql://"):
         return normalized.replace("mysql+pymysql://", "mysql+asyncmy://", 1)
-    if normalized.startswith("sqlite:///") and not normalized.startswith("sqlite+aiosqlite:///"):
-        return normalized.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
-    return normalized
+    if normalized.startswith("mysql+asyncmy://"):
+        return normalized
+    raise RuntimeError(
+        "DATABASE_URL 只支持 mysql+asyncmy:// 连接串；SQLite 兼容路径已下线，请先完成数据迁移"
+    )
 
 
 def build_engine_kwargs(database_url: str) -> dict:
     """
     根据数据库方言返回引擎参数。
 
-    不要把 SQLite 的 `check_same_thread=False` 带到 MySQL；
-    也不要漏掉 MySQL 的连接保活配置，否则服务空闲一段时间后容易在首个请求上打出陈旧连接错误。
+    运行时既然已经冻结为 MySQL-only，就不能再保留 SQLite 参数分支。
+    否则维护者会误以为“只是没人在用”，后续很容易把 SQLite URL 又悄悄接回主链路。
     """
-    normalized = normalize_database_url(database_url)
-    if normalized.startswith("sqlite+aiosqlite://"):
-        return {"connect_args": {"check_same_thread": False}}
+    normalize_database_url(database_url)
 
     return {
         "pool_pre_ping": True,
@@ -76,7 +76,7 @@ async def init_db():
     初始化数据库，创建所有表。
 
     当前发布策略是“新 MySQL 库由 ORM 创建表 + 旧 SQLite 数据通过独立迁移脚本导入”，
-    因此启动阶段不能继续依赖 SQLite 补列逻辑来隐式修库。
+    启动阶段只负责创建当前 ORM 所描述的完整结构，不再承担历史库补列。
     否则部署人员会误以为“只要重启进程就等价于完成迁移”，最终把迁移遗漏变成线上数据问题。
     """
     async with engine.begin() as conn:
@@ -85,75 +85,18 @@ async def init_db():
 
 async def ensure_account_columns(target_engine: AsyncEngine) -> None:
     """
-    为旧版本 SQLite 库补齐 `mihoyo_accounts` 的登录态维护字段。
+    兼容空壳：历史调用点仍可能导入本函数，但运行时已经不再做 SQLite 补列。
 
-    这个函数只保留给旧 SQLite 库的兼容读取与历史数据迁移使用，
-    不能再作为 MySQL 正式部署的主升级路径。误把它当成“通用迁移方案”，
-    会让团队继续在生产代码里堆方言特判，而不是显式执行数据迁移。
+    这里故意保留 no-op，而不是继续偷偷补列：
+    1. 当前 worktree 里仍有旧模块通过 import 引用这个名字，直接删除会让无关路径在导入阶段崩溃
+    2. 但实现必须清空，避免任何入口继续把“运行时修库”当成正式升级方案
+    3. 若后续有人想恢复 SQLite 补列，请通过显式迁移脚本而不是回填这里
     """
-    columns_to_add = {
-        "stoken_encrypted": "TEXT",
-        "ltoken_encrypted": "TEXT",
-        "cookie_token_encrypted": "TEXT",
-        "login_ticket_encrypted": "TEXT",
-        "stuid": "VARCHAR(50)",
-        "mid": "VARCHAR(100)",
-        # 旧 SQLite 库最初只知道“工作 Cookie 是否可用”，并不知道“根凭据是否还能自愈”。
-        # 这里补齐 `credential_*` 和 `last_token_refresh_*`，是为了让历史账号升级后也能表达
-        # 高权限登录状态；否则资产页、健康中心和后续自愈逻辑只能看到一半真相。
-        # 误删这些补列项时，新建库通常察觉不到问题，但老库会在真正读取账号状态时才爆炸。
-        "credential_source": "VARCHAR(30)",
-        "credential_status": "VARCHAR(30)",
-        "cookie_token_updated_at": "DATETIME",
-        "last_refresh_attempt_at": "DATETIME",
-        "last_refresh_status": "VARCHAR(30)",
-        "last_refresh_message": "TEXT",
-        "reauth_notified_at": "DATETIME",
-        "last_token_refresh_at": "DATETIME",
-        "last_token_refresh_status": "VARCHAR(30)",
-        "last_token_refresh_message": "TEXT",
-    }
-
-    async with target_engine.begin() as conn:
-        dialect = conn.dialect.name
-        if dialect != "sqlite":
-            return
-
-        result = await conn.exec_driver_sql("PRAGMA table_info(mihoyo_accounts)")
-        existing_columns = {row[1] for row in result.fetchall()}
-        if not existing_columns:
-            return
-
-        for column_name, column_type in columns_to_add.items():
-            if column_name in existing_columns:
-                continue
-            await conn.exec_driver_sql(
-                f"ALTER TABLE mihoyo_accounts ADD COLUMN {column_name} {column_type}"
-            )
+    _ = target_engine
 
 
 async def ensure_redeem_columns(target_engine: AsyncEngine) -> None:
     """
-    为旧版本 SQLite 库补齐 `redeem_batches` 的新增统计字段。
-
-    同样只用于旧 SQLite 库兼容；MySQL 正式部署不应依赖这里做结构演进。
+    兼容空壳：保留旧名字仅为避免当前导入方立即断裂，禁止再承担 SQLite 结构演进。
     """
-    columns_to_add = {
-        "error_count": "INTEGER DEFAULT 0",
-    }
-
-    async with target_engine.begin() as conn:
-        if conn.dialect.name != "sqlite":
-            return
-
-        result = await conn.exec_driver_sql("PRAGMA table_info(redeem_batches)")
-        existing_columns = {row[1] for row in result.fetchall()}
-        if not existing_columns:
-            return
-
-        for column_name, column_type in columns_to_add.items():
-            if column_name in existing_columns:
-                continue
-            await conn.exec_driver_sql(
-                f"ALTER TABLE redeem_batches ADD COLUMN {column_name} {column_type}"
-            )
+    _ = target_engine
