@@ -103,7 +103,7 @@
 
         <div class="control-side">
           <div class="action-summary">
-            <div class="summary-kicker">Batch Preview</div>
+            <div class="summary-kicker">执行预览</div>
             <div class="summary-title">{{ getGameName(selectedGame) || '请选择游戏' }}</div>
             <div class="summary-value">{{ selectedAccountIds.length }}</div>
             <div class="summary-caption">个账号将接收本次兑换</div>
@@ -136,36 +136,41 @@
 
     <div class="stats-grid">
       <div class="stat-card stat-card-primary">
-        <div class="stat-label">最近批次账号数</div>
+        <div class="stat-label">本次执行总数</div>
         <div class="stat-value">{{ latestBatch?.total_accounts || 0 }}</div>
-        <div class="stat-note">当前选中历史批次覆盖的账号总数</div>
+        <div class="stat-note">当前选中的兑换批次覆盖账号</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">成功兑换</div>
         <div class="stat-value">{{ latestBatch?.success_count || 0 }}</div>
-        <div class="stat-note">真正完成兑换的账号数量</div>
+        <div class="stat-note">真正完成兑换并发放奖励的账号</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">重复兑换</div>
-        <div class="stat-value">{{ latestBatch?.already_redeemed_count || 0 }}</div>
-        <div class="stat-note">已在历史中兑换过该码的账号</div>
+        <div class="stat-label">重复/无效</div>
+        <div class="stat-value">{{ (latestBatch?.already_redeemed_count || 0) + (latestBatch?.invalid_code_count || 0) }}</div>
+        <div class="stat-note">包含已领过或批次中发现的无效码</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">失败账号</div>
-        <div class="stat-value">{{ latestBatch?.failed_count || 0 }}</div>
-        <div class="stat-note">统计无效码、登录失效和其他异常账号</div>
+        <div class="stat-label">登录失效</div>
+        <div class="stat-value">{{ latestBatch?.invalid_cookie_count || 0 }}</div>
+        <div class="stat-note">因 Cookie 过期等原因跳过的账号</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">其他异常</div>
+        <div class="stat-value">{{ latestBatch?.error_count || 0 }}</div>
+        <div class="stat-note">由于网络、API 或未匹配角色导致的异常</div>
       </div>
     </div>
 
     <div class="content-grid">
     <el-card class="history-card panel-card" shadow="never">
         <template #header>
-          <div class="section-header section-header-wrap">
-            <div>
+          <div class="section-header section-header-compact">
+            <div class="section-header-left">
               <div class="section-title">批次历史</div>
-              <div class="section-desc">按游戏查看已经执行过的兑换批次。</div>
+              <div class="section-desc">游戏最近执行记录。</div>
             </div>
-            <el-tag round type="warning" effect="plain">
+            <el-tag round type="warning" effect="plain" class="header-tag">
               {{ getGameName(selectedGame) }} · {{ batches.length }} 批
             </el-tag>
           </div>
@@ -210,10 +215,10 @@
 
       <el-card class="detail-card panel-card" shadow="never">
         <template #header>
-          <div class="section-header section-header-wrap">
-            <div>
+          <div class="section-header section-header-compact">
+            <div class="section-header-left">
               <div class="section-title">批次详情</div>
-              <div class="section-desc">查看单账号执行状态、原因和时间留痕。</div>
+              <div class="section-desc">单账号执行留痕。</div>
             </div>
             <el-button
               text
@@ -656,29 +661,6 @@ onMounted(refreshAll)
   overflow: hidden;
 }
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.section-header-wrap {
-  flex-wrap: wrap;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.section-desc {
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
 .control-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) 320px;
@@ -821,8 +803,8 @@ onMounted(refreshAll)
 
 .execute-button {
   min-height: 48px;
-  background: var(--bg-elevated);
-  border: none;
+  font-size: 15px;
+  font-weight: 600;
   box-shadow: var(--shadow-soft);
 }
 
@@ -863,16 +845,18 @@ onMounted(refreshAll)
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 360px repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 
 .stat-card {
   border-radius: 20px;
-  padding: 22px;
+  padding: 20px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-soft);
   box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
 }
 
 .stat-card-primary {
@@ -904,6 +888,23 @@ onMounted(refreshAll)
   grid-template-columns: 360px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.section-header-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.section-header-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.header-tag {
+  flex-shrink: 0;
 }
 
 .history-list {
@@ -1112,8 +1113,13 @@ onMounted(refreshAll)
 
 @media (max-width: 1200px) {
   .content-grid,
-  .control-grid {
+  .control-grid,
+  .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 

@@ -1,5 +1,5 @@
 <template>
-  <div v-if="userStore.isAdmin" class="admin-users-page">
+  <div v-if="userStore.isAdmin" class="app-page admin-users-page">
     <el-card class="users-card" shadow="never">
       <template #header>
         <div class="card-header">
@@ -115,8 +115,7 @@ onMounted(loadUsers)
 
 <style scoped>
 .admin-users-page {
-  max-width: 1280px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .users-card {

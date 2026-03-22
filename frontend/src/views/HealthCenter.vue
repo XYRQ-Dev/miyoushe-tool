@@ -32,7 +32,7 @@
       </div>
     </div>
 
-    <el-card class="filter-card filter-panel" shadow="never">
+    <el-card class="filter-card" shadow="never">
       <div class="filter-row">
         <div class="filter-group">
           <span class="filter-label">筛选</span>
@@ -51,6 +51,7 @@
             placeholder="搜索账号昵称或米游社 UID"
             clearable
             class="search-input"
+            size="default"
           />
           <el-button :icon="Refresh" :loading="loading" @click="loadOverview">
             刷新
@@ -148,6 +149,8 @@
               <el-button
                 size="small"
                 plain
+                class="action-btn"
+                :icon="RefreshRight"
                 :loading="maintainingAccountId === account.account_id"
                 @click="handleCheck(account)"
               >
@@ -156,14 +159,18 @@
               <el-button
                 size="small"
                 type="primary"
+                class="action-btn"
+                :icon="Refresh"
                 :loading="reauthingAccountId === account.account_id"
                 @click="handleReauth(account)"
               >
-                {{ account.cookie_status === 'reauth_required' ? '重新扫码' : '扫码更新凭据' }}
+                {{ account.cookie_status === 'reauth_required' ? '重新扫码' : '扫码更新' }}
               </el-button>
               <el-button
                 size="small"
                 plain
+                class="action-btn"
+                :icon="Memo"
                 :disabled="!account.supported_assets.includes('gacha')"
                 @click="jumpToAsset('/gacha', account)"
               >
@@ -172,10 +179,12 @@
               <el-button
                 size="small"
                 plain
+                class="action-btn"
+                :icon="Ticket"
                 :disabled="!account.supported_assets.includes('redeem')"
                 @click="jumpToAsset('/redeem', account)"
               >
-                兑换码中心
+                兑换中心
               </el-button>
             </div>
           </article>
@@ -239,7 +248,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight, Memo, Ticket } from '@element-plus/icons-vue'
 import { accountApi, healthCenterApi } from '../api'
 import QrLoginDialog from '../components/QrLoginDialog.vue'
 import { getGameName } from '../constants/game'
@@ -495,6 +504,7 @@ onMounted(loadOverview)
 <style scoped>
 .health-page {
   width: 100%;
+  gap: var(--space-4);
 }
 
 .summary-grid {
@@ -553,6 +563,10 @@ onMounted(loadOverview)
   overflow: hidden;
 }
 
+.filter-card :deep(.el-card__body) {
+  padding: 14px 20px;
+}
+
 .filter-row {
   display: flex;
   align-items: center;
@@ -561,28 +575,16 @@ onMounted(loadOverview)
 }
 
 .filter-group,
-.filter-actions,
-.section-header {
+.filter-actions {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.section-header {
-  justify-content: space-between;
-}
-
-.filter-label,
-.section-title {
+.filter-label {
   font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
-}
-
-.section-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 
 .search-input {
@@ -752,9 +754,14 @@ onMounted(loadOverview)
 
 .action-row {
   margin-top: var(--space-4);
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: var(--space-2);
+}
+
+.action-btn {
+  width: 100%;
+  margin: 0 !important;
 }
 
 .event-list {

@@ -1,29 +1,35 @@
 <template>
   <div class="app-page accounts-page">
     <div class="action-bar">
-      <el-button type="primary" :icon="Plus" @click="handleAddAccount">
+      <el-button type="primary" :icon="Plus" class="add-btn" @click="handleAddAccount">
         添加高权限账号
       </el-button>
     </div>
 
     <section class="account-notice-grid">
       <div class="account-notice account-notice-info">
-        <div class="notice-title">登录态维护说明</div>
-        <p class="notice-desc">
-          卡片中的“校验登录态”当前语义是“校验并尝试修复登录态”。
-          如果账号仍停留在旧网页登录形态，系统会提示重新走高权限登录升级。
-        </p>
+        <el-icon class="notice-icon"><InfoFilled /></el-icon>
+        <div class="notice-content">
+          <div class="notice-title">登录态维护说明</div>
+          <div class="notice-desc">
+            卡片中的“校验登录态”当前语义是“校验并尝试修复登录态”。
+            如果账号仍停留在旧网页登录形态，系统会提示重新走高权限登录升级。
+          </div>
+        </div>
       </div>
 
       <div
         v-if="accountsNeedingUpgrade.length"
         class="account-notice account-notice-warning"
       >
-        <div class="notice-title">发现 {{ accountsNeedingUpgrade.length }} 个待升级账号</div>
-        <p class="notice-desc">
-          这些账号仍只有旧网页登录 Cookie，缺少 Passport 根凭据。
-          请在对应卡片上使用“扫码更新凭据”升级到高权限登录态，否则后续自动修复能力不完整。
-        </p>
+        <el-icon class="notice-icon"><WarningFilled /></el-icon>
+        <div class="notice-content">
+          <div class="notice-title">发现 {{ accountsNeedingUpgrade.length }} 个待升级账号</div>
+          <div class="notice-desc">
+            这些账号仍只有旧网页登录 Cookie，缺少 Passport 根凭据。
+            请在对应卡片上使用“扫码更新凭据”升级到高权限登录态，否则后续自动修复能力不完整。
+          </div>
+        </div>
       </div>
     </section>
 
@@ -48,15 +54,22 @@
             ? 'credential-banner-warning'
             : 'credential-banner-success'"
         >
+          <el-icon class="banner-icon" :class="account.upgrade_required || !account.has_high_privilege_auth ? 'text-warning' : 'text-success'">
+            <WarningFilled v-if="account.upgrade_required || !account.has_high_privilege_auth" />
+            <SuccessFilled v-else />
+          </el-icon>
           <div class="credential-banner-main">
             <div class="credential-banner-title">{{ getCredentialBannerTitle(account) }}</div>
-            <div class="credential-banner-desc">{{ getCredentialBannerDescription(account) }}</div>
+            <div class="credential-banner-desc" :title="getCredentialBannerDescription(account)">
+              {{ getCredentialBannerDescription(account) }}
+            </div>
           </div>
           <el-button
             v-if="account.upgrade_required || !account.has_high_privilege_auth"
             size="small"
             type="warning"
             plain
+            class="upgrade-btn"
             @click="handleRefreshCookie(account)"
           >
             立即升级
@@ -84,7 +97,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, InfoFilled, WarningFilled, SuccessFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { accountApi } from '../api'
 import AccountCard from '../components/AccountCard.vue'
@@ -183,23 +196,23 @@ function getCredentialBannerTitle(account: AccountItem) {
   if (account.credential_status === 'reauth_required') {
     return '高权限登录需要重新确认'
   }
-  return '高权限登录状态待确认'
+  return '高权限状态待确认'
 }
 
 function getCredentialBannerDescription(account: AccountItem) {
   if (account.upgrade_required) {
-    return '该账号仍依赖旧网页登录 Cookie。请重新扫码升级，否则后续登录态校验只能提示风险，无法稳定自修复。'
+    return '该账号依赖网页 Cookie。请扫码升级，否则修复能力受限。'
   }
   if (!account.has_high_privilege_auth) {
-    return '当前账号还没有 Passport 根凭据，建议尽快补齐高权限登录态。'
+    return '建议尽快补齐 Passport 根凭据。'
   }
   if (account.credential_status === 'valid') {
-    return 'Passport 根凭据已接入；后续登录态校验会优先基于高权限凭据尝试修复工作 Cookie。'
+    return '系统优先基于高权限凭据修复 Cookie。'
   }
   if (account.credential_status === 'reauth_required') {
-    return account.last_refresh_message || '系统已确认当前高权限登录态需要重新扫码更新。'
+    return account.last_refresh_message || '需要重新扫码更新。'
   }
-  return '当前账号的高权限状态尚未有明确结论，可先执行一次登录态校验。'
+  return '可先执行一次登录态校验再确认。'
 }
 
 function onLoginSuccess() {
@@ -216,104 +229,134 @@ onMounted(loadAccounts)
 <style scoped>
 .accounts-page {
   width: 100%;
+  gap: var(--space-3);
 }
 
 .action-bar {
-  margin-bottom: var(--space-2);
+  display: flex;
+  justify-content: flex-start;
+}
+
+.add-btn {
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
 }
 
 .account-notice-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+
+@media (min-width: 768px) {
+  .account-notice-grid {
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  }
 }
 
 .account-notice {
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  border: 1px solid transparent;
+  display: flex;
+  gap: var(--space-2);
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-soft);
 }
 
 .account-notice-info {
   background: var(--bg-info-soft);
-  border-color: var(--border-info-soft);
+  border-color: var(--color-info-light-8);
 }
 
 .account-notice-warning {
   background: var(--bg-warning-soft);
-  border-color: var(--border-warning-soft);
+  border-color: var(--color-warning-light-8);
+}
+
+.notice-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.account-notice-info .notice-icon { color: var(--color-info); }
+.account-notice-warning .notice-icon { color: var(--color-warning); }
+
+.notice-content {
+  flex: 1;
 }
 
 .notice-title {
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-primary);
+  margin-bottom: 4px;
 }
 
 .notice-desc {
-  margin-top: 6px;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.5;
   color: var(--text-secondary);
 }
 
 .account-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: var(--space-5);
 }
 
 .account-item {
   display: flex;
   flex-direction: column;
-  background: var(--bg-surface-muted);
-  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-soft);
-  overflow: hidden;
   box-shadow: var(--shadow-soft);
-  transition: all var(--transition-medium);
+  overflow: hidden;
+  transition: transform var(--transition-medium), box-shadow var(--transition-medium), border-color var(--transition-medium);
 }
 
 .account-item:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-medium);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-medium);
 }
 
 .credential-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
-  padding: 10px var(--space-4);
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border-soft);
 }
 
-.credential-banner-warning {
-  background: var(--bg-warning-soft);
-}
+.credential-banner-warning { background: var(--bg-warning-soft); }
+.credential-banner-success { background: var(--bg-success-soft); }
 
-.credential-banner-success {
-  background: var(--bg-success-soft);
-}
+.banner-icon { font-size: 18px; }
+.text-warning { color: var(--color-warning); }
+.text-success { color: var(--color-success); }
 
 .credential-banner-main {
+  flex: 1;
   min-width: 0;
 }
 
 .credential-banner-title {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-primary);
+  margin-bottom: 2px;
 }
 
 .credential-banner-desc {
-  margin-top: 2px;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 12px;
   color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.upgrade-btn {
+  font-weight: 600;
 }
 
 .account-item :deep(.account-card) {
@@ -328,10 +371,6 @@ onMounted(loadAccounts)
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
-  }
-
-  .credential-banner :deep(.el-button) {
-    width: 100%;
   }
 }
 </style>

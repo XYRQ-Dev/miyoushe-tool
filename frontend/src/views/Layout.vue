@@ -384,11 +384,15 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1080px) {
-  .shell-sidebar {
+  .shell-sidebar:not(.shell-sidebar-mobile) {
     width: 84px;
   }
-  .brand-copy, .sidebar-toggle span {
+  .shell-sidebar:not(.shell-sidebar-mobile) .brand-copy,
+  .shell-sidebar:not(.shell-sidebar-mobile) .sidebar-toggle span {
     display: none;
+  }
+  .shell-sidebar-mobile {
+    width: 100%;
   }
 }
 

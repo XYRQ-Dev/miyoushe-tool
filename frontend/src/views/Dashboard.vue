@@ -338,27 +338,64 @@ onMounted(loadData)
 
 @media (max-width: 1024px) {
   .calendar-grid {
-    grid-template-columns: repeat(4, 1fr);
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: var(--space-2);
+    scroll-snap-type: x mandatory;
+    gap: var(--space-3);
+  }
+  
+  .calendar-day {
+    flex: 0 0 calc(25% - var(--space-3) * 3 / 4);
+    scroll-snap-align: start;
   }
 }
 
 @media (max-width: 640px) {
   .stat-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
+  .stat-card {
+    padding: var(--space-3);
+    gap: var(--space-2);
+    align-items: center;
+  }
+
+  .stat-icon {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .stat-label {
+    font-size: 12px;
   }
 
   .action-bar {
     flex-direction: column;
+    align-items: stretch;
   }
 
-  .calendar-grid {
-    grid-template-columns: repeat(2, 1fr);
+  .action-bar .el-button {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+
+  .calendar-day {
+    flex: 0 0 calc(33.333% - var(--space-3) * 2 / 3);
   }
 }
 
 @media (max-width: 480px) {
-  .stat-cards {
-    grid-template-columns: 1fr;
+  .calendar-day {
+    flex: 0 0 calc(50% - var(--space-3) / 2);
   }
 }
 </style>

@@ -171,8 +171,8 @@ select {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-4);
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
 }
 
 .page-toolbar {
@@ -296,8 +296,12 @@ select {
 
 .app-root .el-button--primary:not(.is-disabled):hover {
   background: var(--bg-primary-hover);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  transform: translateY(-1.5px) scale(1.02);
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3);
+}
+
+.app-root .el-button--primary:not(.is-disabled):active {
+  transform: translateY(0) scale(0.98);
 }
 
 .app-root .el-button.is-round {
@@ -359,3 +363,88 @@ select {
   }
 }
 
+/* ========== Global Section Header Styles ========== */
+.section-header,
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.section-header-wrap {
+  flex-wrap: wrap;
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  letter-spacing: 0.02em;
+}
+
+.section-desc {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 600px;
+  margin-top: 0;
+}
+
+.section-icon {
+  font-size: 24px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-info-soft);
+  color: var(--brand-primary);
+  border-radius: var(--radius-sm);
+  flex: 0 0 auto;
+}
+
+/* ========== Global Pagination Enhancements ========== */
+.app-root .el-pagination.is-background .el-pager li {
+  background-color: var(--bg-soft) !important;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+  margin: 0 3px;
+}
+
+.app-root .el-pagination.is-background .el-pager li:not(.is-active):hover {
+  background-color: var(--bg-info-soft) !important;
+  color: var(--brand-primary);
+  border-color: var(--border-info-soft);
+  transform: translateY(-1px);
+}
+
+.app-root .el-pagination.is-background .el-pager li.is-active {
+  background: var(--bg-primary) !important;
+  color: white !important;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.app-root .el-pagination.is-background .btn-prev,
+.app-root .el-pagination.is-background .btn-next {
+  background-color: var(--bg-soft) !important;
+  border-radius: 8px !important;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+}
+
+.app-root .el-pagination.is-background .btn-prev:not(:disabled):hover,
+.app-root .el-pagination.is-background .btn-next:not(:disabled):hover {
+  background-color: var(--bg-info-soft) !important;
+  color: var(--brand-primary);
+  border-color: var(--border-info-soft);
+}
+
+.app-root .el-pagination .el-select .el-select__wrapper {
+  background-color: var(--bg-soft);
+}

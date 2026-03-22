@@ -1,45 +1,39 @@
 <template>
   <div class="app-page logs-page">
     <el-card class="filter-card filter-panel" shadow="never">
-      <el-form inline size="small">
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" clearable placeholder="全部" style="width: 140px">
-            <el-option label="成功" value="success" />
-            <el-option label="失败" value="failed" />
-            <el-option label="已签到" value="already_signed" />
-            <el-option label="风控" value="risk" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="日期范围">
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            format="YYYY-MM-DD"
-            value-format="YYYY-MM-DD"
-            style="width: 250px"
-          />
-        </el-form-item>
-        <el-form-item>
+      <div class="filter-row">
+        <div class="filter-cluster">
+          <div class="filter-item">
+            <span class="filter-label">状态</span>
+            <el-select v-model="filters.status" clearable placeholder="全部" style="width: 140px">
+              <el-option label="成功" value="success" />
+              <el-option label="失败" value="failed" />
+              <el-option label="已签到" value="already_signed" />
+              <el-option label="风控" value="risk" />
+            </el-select>
+          </div>
+          <div class="filter-item">
+            <span class="filter-label">日期范围</span>
+            <el-date-picker
+              v-model="dateRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              format="YYYY-MM-DD"
+              value-format="YYYY-MM-DD"
+              style="width: 250px"
+            />
+          </div>
+        </div>
+        <div class="filter-actions">
           <el-button type="primary" :icon="Search" round @click="loadLogs">查询</el-button>
-          <el-button :icon="RefreshLeft" round @click="resetFilters">重置</el-button>
-        </el-form-item>
-      </el-form>
+          <el-button :icon="RefreshLeft" round plain @click="resetFilters">重置</el-button>
+        </div>
+      </div>
     </el-card>
 
     <el-card class="table-card data-table-card" shadow="never">
-      <template #header>
-        <div class="section-head">
-          <div>
-            <div class="section-title">执行记录</div>
-            <div class="section-desc">按时间、账号、游戏和执行结果查看最近的签到落库情况。</div>
-          </div>
-          <div class="soft-chip">共 {{ pagination.total }} 条</div>
-        </div>
-      </template>
-
       <el-table :data="logs" v-loading="loading" stripe style="width: 100%" table-layout="auto">
         <el-table-column label="时间" prop="executed_at" :min-width="compactMode ? 150 : 180">
           <template #default="{ row }">
@@ -164,13 +158,15 @@ onBeforeUnmount(() => {
 <style scoped>
 .logs-page {
   width: 100%;
-  gap: 12px !important; /* Increased from 4px to 12px for better breathing room */
+  gap: var(--space-3);
 }
 
 .logs-page :deep(.filter-card.filter-panel) {
-  margin-bottom: 0;
-  border-radius: 16px;
-  padding: 0 !important; /* Force remove the 20px padding from app-theme.css */
+  margin-bottom: 0px;
+  border-radius: 20px;
+  padding: 0 !important;
+  border: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-soft);
 }
 
 .logs-page :deep(.filter-card.filter-panel .el-card__body) {
@@ -180,32 +176,48 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
-.filter-card :deep(.el-form) {
+.filter-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.filter-cluster {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 16px;
   flex-wrap: wrap;
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-label::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  background: var(--brand-primary);
+  border-radius: 1px;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: center;
   gap: 12px;
-}
-
-.filter-card :deep(.el-form-item) {
-  margin-bottom: 0;
-  margin-right: 0;
-  display: flex;
-  align-items: center;
-}
-
-.filter-card :deep(.el-form-item__label) {
-  padding-right: 8px;
-  line-height: normal;
-  display: flex;
-  align-items: center;
-  margin-bottom: 0;
-}
-
-.filter-card :deep(.el-form-item__content) {
-  line-height: normal;
-  display: flex;
-  align-items: center;
 }
 
 .table-card {
@@ -214,9 +226,10 @@ onBeforeUnmount(() => {
 }
 
 .pagination {
-  margin-top: 18px;
+  margin-top: 24px;
   display: flex;
   justify-content: flex-end;
+  padding-bottom: 8px;
 }
 
 .log-message {
@@ -241,13 +254,16 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 
-  .filter-card :deep(.el-form) {
-    display: flex;
-    flex-wrap: wrap;
+  .filter-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
-  .filter-card :deep(.el-form-item) {
-    margin-right: 12px;
+  .filter-cluster {
+    width: 100%;
+  }
+
+  .filter-item {
     margin-bottom: 12px;
   }
 

@@ -102,67 +102,98 @@
                 v-for="role in account.roles"
                 :key="role.role_id"
                 class="role-card"
+                :class="['game-' + role.game]"
               >
-                <div class="role-card-head">
-                  <div>
-                    <div class="role-game-row">
-                      <span class="role-game-chip">{{ role.game_name }}</span>
+                <div class="role-card-inner">
+                  <header class="role-header">
+                    <div class="role-identity">
+                      <div class="role-game-badge">
+                        <span class="game-dot"></span>
+                        {{ role.game_name }}
+                      </div>
+                      <h3 class="role-nickname">{{ role.nickname || role.game_uid }}</h3>
+                      <div class="role-meta-tags">
+                        <span class="meta-tag">
+                          <el-icon><User /></el-icon>
+                          {{ role.game_uid }}
+                        </span>
+                        <span v-if="role.region" class="meta-tag">
+                          <el-icon><Location /></el-icon>
+                          {{ role.region }}
+                        </span>
+                      </div>
                     </div>
-                    <div class="role-name">{{ role.nickname || role.game_uid }}</div>
-                    <div class="role-meta">
-                      UID {{ role.game_uid }}
-                      <span v-if="role.region">· {{ role.region }}</span>
-                      <span v-if="role.level">· Lv.{{ role.level }}</span>
+                    <div class="role-stats">
+                      <div class="level-box">
+                        <span class="level-label">LV</span>
+                        <span class="level-value">{{ role.level || '?' }}</span>
+                      </div>
+                    </div>
+                  </header>
+
+                  <div class="role-status-row">
+                    <section class="status-box checkin-box" :class="'status-' + role.recent_checkin.last_status">
+                      <div class="status-header">
+                        <el-icon v-if="role.recent_checkin.last_status === 'success'"><CircleCheck /></el-icon>
+                        <el-icon v-else-if="role.recent_checkin.last_status === 'failed'"><CircleClose /></el-icon>
+                        <el-icon v-else><Warning /></el-icon>
+                        最近签到
+                      </div>
+                      <div class="status-body">
+                        <span class="status-text">{{ getCheckinStatusText(role.recent_checkin.last_status) }}</span>
+                        <span v-if="role.recent_checkin.last_executed_at" class="status-time">
+                          {{ formatTimeAgo(role.recent_checkin.last_executed_at) }}
+                        </span>
+                      </div>
+                    </section>
+                  </div>
+
+                  <div class="role-details-group">
+                    <div class="asset-pills">
+                      <span
+                        v-for="asset in role.supported_assets"
+                        :key="asset"
+                        class="asset-pill-mini"
+                      >
+                        <el-icon v-if="asset === 'checkin'"><Calendar /></el-icon>
+                        <el-icon v-else-if="asset === 'gacha'"><TrendCharts /></el-icon>
+                        <el-icon v-else-if="asset === 'redeem'"><Ticket /></el-icon>
+                        {{ getAssetLabel(asset) }}
+                      </span>
+                      <span v-if="!role.supported_assets.length" class="asset-pill-mini muted">
+                        暂无可用功能
+                      </span>
+                    </div>
+                    <div v-if="role.has_gacha_archive" class="archive-status">
+                      <el-icon><Coin /></el-icon>
+                      已归档抽卡
                     </div>
                   </div>
-                  <div class="archive-pill" :class="{ 'archive-pill-active': role.has_gacha_archive }">
-                    {{ role.has_gacha_archive ? '已归档抽卡' : '未归档抽卡' }}
-                  </div>
-                </div>
 
-                <div class="status-grid">
-                  <div class="status-card">
-                    <div class="status-label">最近签到</div>
-                    <div class="status-value">
-                      {{ getCheckinStatusText(role.recent_checkin.last_status) }}
-                    </div>
-                    <div class="status-note">
-                      {{ getCheckinNote(role.recent_checkin.last_message, role.recent_checkin.last_executed_at) }}
-                    </div>
-                  </div>
-                </div>
-
-                <div class="chip-group">
-                  <span
-                    v-for="asset in role.supported_assets"
-                    :key="asset"
-                    class="asset-chip"
-                  >
-                    {{ getAssetLabel(asset) }}
-                  </span>
-                  <span v-if="!role.supported_assets.length" class="asset-chip asset-chip-muted">
-                    暂无可用功能
-                  </span>
-                </div>
-
-                <div class="action-row">
-                  <el-button
-                    size="small"
-                    plain
-                    :disabled="!role.supported_assets.includes('gacha')"
-                    @click="jumpToGacha(account.account_id, role.game, role.game_uid)"
-                  >
-                    抽卡记录
-                  </el-button>
-                  <el-button
-                    size="small"
-                    type="primary"
-                    plain
-                    :disabled="!role.supported_assets.includes('redeem')"
-                    @click="jumpToRedeem(account.account_id, role.game)"
-                  >
-                    兑换码
-                  </el-button>
+                  <footer class="role-actions-bar">
+                    <el-button
+                      size="small"
+                      link
+                      class="action-btn-link"
+                      v-if="role.supported_assets.includes('gacha')"
+                      @click="jumpToGacha(account.account_id, role.game, role.game_uid)"
+                    >
+                      <template #icon><el-icon><TrendCharts /></el-icon></template>
+                      抽卡记录
+                    </el-button>
+                    <el-button
+                      size="small"
+                      link
+                      class="action-btn-link"
+                      v-if="role.supported_assets.includes('redeem')"
+                      @click="jumpToRedeem(account.account_id, role.game)"
+                    >
+                      <template #icon><el-icon><Ticket /></el-icon></template>
+                      兑换码
+                    </el-button>
+                    <div class="flex-spacer"></div>
+                    <div class="action-hint">查看详情 <el-icon><ArrowRight /></el-icon></div>
+                  </footer>
                 </div>
               </article>
             </div>
@@ -176,9 +207,28 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { 
+  Refresh, User, Location, Calendar, Ticket, 
+  TrendCharts, Coin, Timer, CircleCheck, CircleClose, Warning,
+  ArrowRight
+} from '@element-plus/icons-vue'
 import { assetApi } from '../api'
 import { getGameName } from '../constants/game'
+
+function formatTimeAgo(value?: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) return `${days}天前`
+  if (hours > 0) return `${hours}小时前`
+  if (minutes > 0) return `${minutes}分钟前`
+  return '刚刚'
+}
 
 type RoleAssetCheckin = {
   last_status?: string | null
@@ -471,167 +521,248 @@ onMounted(loadOverview)
 .role-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 20px;
 }
 
 .role-card {
-  padding: 18px;
-  border-radius: 22px;
-  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
   box-shadow: var(--shadow-soft);
+  transition: all var(--transition-medium);
+  overflow: hidden;
+  position: relative;
 }
 
-.role-card-head {
+.role-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-medium);
+  border-color: var(--border-strong);
+}
+
+.role-card::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 100px; height: 100px;
+  background: radial-gradient(circle at top right, var(--accent-color, transparent), transparent 70%);
+  opacity: 0.1;
+  pointer-events: none;
+}
+
+.role-card-inner {
+  padding: 24px;
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.role-header {
+  display: flex;
   justify-content: space-between;
-  gap: 16px;
+  align-items: flex-start;
 }
 
-.role-game-row {
-  display: flex;
+.role-game-badge {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.game-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-color, var(--text-tertiary));
+}
+
+.role-nickname {
+  margin: 0 0 6px 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.role-meta-tags {
+  display: flex;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.role-game-chip {
-  min-height: 28px;
-  padding: 0 12px;
-  border-radius: 999px;
-  display: inline-flex;
+.meta-tag {
+  display: flex;
   align-items: center;
-  background: rgba(15, 23, 42, 0.08);
-  color: #0f172a;
+  gap: 4px;
   font-size: 12px;
-  font-weight: 700;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
 }
 
-.role-name {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
+.meta-tag .el-icon { font-size: 14px; }
 
-.role-meta {
-  margin-top: 6px;
-  font-size: 12px;
-  line-height: 1.65;
-  color: var(--text-secondary);
-}
-
-.archive-pill {
-  min-width: 104px;
-  padding: 10px 12px;
-  border-radius: 16px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #64748b;
-  background: rgba(255, 255, 255, 0.72);
+.level-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  background: var(--bg-soft);
+  border-radius: 14px;
   border: 1px solid var(--border-soft);
 }
 
-.archive-pill-active {
-  color: #0f766e;
-  background: rgba(204, 251, 241, 0.72);
-  border-color: var(--border-soft);
-}
+.level-label { font-size: 9px; font-weight: 800; color: var(--text-tertiary); }
+.level-value { font-size: 20px; font-weight: 800; color: var(--accent-color, var(--text-primary)); font-family: var(--font-mono, monospace); }
 
-.status-grid {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: 1fr;
+.role-status-row {
+  display: flex;
   gap: 12px;
 }
 
-.status-card {
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.72);
+.status-box {
+  flex: 1;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-muted);
   border: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.status-label {
+.status-header {
   font-size: 12px;
   color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
 }
 
-.status-value {
-  margin-top: 8px;
-  font-size: 16px;
+.status-body {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.status-text {
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
-.status-note {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.65;
-  color: var(--text-secondary);
+.status-time {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
-.chip-group {
+.status-success { border-left: 3px solid var(--color-success); }
+.status-success .status-header .el-icon { color: var(--color-success); }
+.status-failed { border-left: 3px solid var(--color-danger); }
+.status-failed .status-header .el-icon { color: var(--color-danger); }
+.status-risk { border-left: 3px solid var(--color-warning); }
+
+.role-details-group {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.asset-chip {
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  display: inline-flex;
+  justify-content: space-between;
   align-items: center;
-  background: rgba(14, 165, 233, 0.1);
-  color: #0369a1;
-  font-size: 12px;
-  font-weight: 600;
+  padding-bottom: 2px;
 }
 
-.asset-chip-muted {
-  background: var(--bg-soft);
-  color: var(--text-secondary);
-}
-
-.action-row {
-  margin-top: 16px;
+.asset-pills {
   display: flex;
+  gap: 6px;
   flex-wrap: wrap;
-  gap: 8px;
 }
+
+.asset-pill-mini {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg-info-soft);
+  color: var(--text-info);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.asset-pill-mini.muted { background: var(--bg-soft); color: var(--text-tertiary); }
+
+.archive-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-success);
+  font-weight: 700;
+  background: var(--bg-success-soft);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.role-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.action-btn-link {
+  font-weight: 700;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.action-btn-link:hover {
+  color: var(--brand-primary);
+}
+
+.flex-spacer { flex: 1; }
+
+.action-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transform: translateX(-10px);
+  transition: all var(--transition-medium);
+}
+
+.role-card:hover .action-hint {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Game Themed Accents */
+.game-genshin, .game-hk4e_cn, .game-hk4e_bilibili { --accent-color: #4ade80; }
+.game-starrail, .game-hkrpg_cn, .game-hkrpg_bilibili { --accent-color: #818cf8; }
+.game-honkai3rd, .game-bh3_cn { --accent-color: #f472b6; }
+.game-zenless, .game-nap_cn { --accent-color: #fbbf24; }
 
 @media (max-width: 1280px) {
-  .role-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 900px) {
-  .filter-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .filter-search,
-  .filter-select {
-    width: 100%;
-  }
+  .role-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
-  .asset-page {
-    gap: 16px;
-  }
-
-  .summary-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .role-card-head {
-    flex-direction: column;
-  }
+  .role-card-inner { padding: 20px; }
+  .role-header { flex-direction: column; gap: 16px; }
+  .role-stats { align-self: flex-end; }
+  .role-nickname { font-size: 20px; }
+  .role-actions-bar { flex-wrap: wrap; }
 }
 </style>

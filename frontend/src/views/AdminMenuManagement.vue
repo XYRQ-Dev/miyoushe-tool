@@ -1,5 +1,5 @@
 <template>
-  <div v-if="userStore.isAdmin" class="admin-menu-page">
+  <div v-if="userStore.isAdmin" class="app-page admin-menu-page">
     <el-card class="menu-card" shadow="never">
       <template #header>
         <div class="card-header">

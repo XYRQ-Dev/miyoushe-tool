@@ -335,12 +335,6 @@ onMounted(loadSettings)
   overflow: hidden;
 }
 
-.section-icon {
-  font-size: 18px;
-  color: var(--brand-secondary);
-  flex: 0 0 auto;
-}
-
 .form-hint {
   display: inline-block;
   margin-left: 12px;
