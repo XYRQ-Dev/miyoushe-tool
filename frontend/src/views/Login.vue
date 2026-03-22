@@ -6,43 +6,64 @@
       <div class="grid-glow"></div>
     </div>
 
-    <div class="login-shell">
-      <section class="login-brand-panel">
-        <h1>米游社自动签到助手</h1>
-        <p class="brand-desc">一站式管理您的游戏账号、签到状态与抽卡记录。</p>
-        <div class="brand-points">
-          <div class="brand-point">
-            <span class="point-dot"></span>
-            <span>实时掌控账号状态，及时处理登录失效与异常。</span>
+    <div class="login-container">
+      <!-- Left: Brand Section -->
+      <section class="brand-section">
+        <div class="brand-content">
+          <div class="brand-header">
+            <div class="brand-logo">
+              <el-icon :size="32"><Star /></el-icon>
+            </div>
+            <h1>米游社自动签到助手</h1>
           </div>
-          <div class="brand-point">
-            <span class="point-dot"></span>
-            <span>全自动执行每日签到，支持快捷兑换与抽卡分析。</span>
+          
+          <p class="brand-tagline">一站式管理您的游戏账号、签到状态与抽卡记录。</p>
+          
+          <div class="brand-features">
+            <div class="feature-item">
+              <div class="feature-icon"><el-icon><Monitor /></el-icon></div>
+              <div class="feature-text">
+                <h3>时刻同步</h3>
+                <p>实时掌控账号状态，及时处理登录失效与异常。</p>
+              </div>
+            </div>
+            <div class="feature-item">
+              <div class="feature-icon"><el-icon><Timer /></el-icon></div>
+              <div class="feature-text">
+                <h3>全自动执行</h3>
+                <p>全自动执行每日签到，支持快捷兑换与抽卡分析。</p>
+              </div>
+            </div>
+            <div class="feature-item">
+              <div class="feature-icon"><el-icon><Lock /></el-icon></div>
+              <div class="feature-text">
+                <h3>安全稳定</h3>
+                <p>加密存储 Cookie，确保您的账号安全万无一失。</p>
+              </div>
+            </div>
           </div>
-          <div class="brand-point">
-            <span class="point-dot"></span>
-            <span>灵活的权限与通知配置，确保任务流转稳定可靠。</span>
-          </div>
+        </div>
+        
+        <div class="brand-footer">
+          <span>XYRQ-Dev Project</span>
+          <span class="version">v2.0.0</span>
         </div>
       </section>
 
-      <section class="login-card">
-        <div class="logo-area">
-          <div class="logo-icon">
-            <el-icon :size="30"><Star /></el-icon>
-          </div>
-          <div>
-            <h2>登录与注册</h2>
-            <p>欢迎使用，请登录或注册您的账号。</p>
-          </div>
+      <!-- Right: Form Section -->
+      <section class="form-section">
+        <div class="form-header">
+          <h2>欢迎回来</h2>
+          <p>请登录或注册您的管理账号</p>
         </div>
 
-        <el-tabs v-model="activeTab" class="login-tabs">
+        <el-tabs v-model="activeTab" class="custom-tabs">
           <el-tab-pane label="登录" name="login">
             <el-form
               ref="loginFormRef"
               :model="loginForm"
               :rules="loginRules"
+              class="auth-form"
               @submit.prevent="handleLogin"
             >
               <el-form-item prop="username">
@@ -64,15 +85,17 @@
                   @keyup.enter="handleLogin"
                 />
               </el-form-item>
-              <el-button
-                type="primary"
-                size="large"
-                class="submit-btn"
-                :loading="loading"
-                @click="handleLogin"
-              >
-                登录
-              </el-button>
+              <div class="form-actions">
+                <el-button
+                  type="primary"
+                  size="large"
+                  class="submit-btn"
+                  :loading="loading"
+                  @click="handleLogin"
+                >
+                  立即登录
+                </el-button>
+              </div>
             </el-form>
           </el-tab-pane>
 
@@ -81,6 +104,7 @@
               ref="registerFormRef"
               :model="registerForm"
               :rules="registerRules"
+              class="auth-form"
               @submit.prevent="handleRegister"
             >
               <el-form-item prop="username">
@@ -112,17 +136,22 @@
                   @keyup.enter="handleRegister"
                 />
               </el-form-item>
-              <el-button
-                type="primary"
-                size="large"
-                class="submit-btn"
-                :loading="loading"
-                @click="handleRegister"
-              >
-                注册
-              </el-button>
+              <div class="form-actions">
+                <el-button
+                  type="primary"
+                  size="large"
+                  class="submit-btn"
+                  :loading="loading"
+                  @click="handleRegister"
+                >
+                  创建账号
+                </el-button>
+              </div>
             </el-form>
-            <p class="hint-text">首个注册用户将自动成为管理员</p>
+            <p class="hint-text">
+              <el-icon><InfoFilled /></el-icon>
+              首个注册用户将自动开启管理员权限
+            </p>
           </el-tab-pane>
         </el-tabs>
       </section>
@@ -133,7 +162,7 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { User, Lock, Star } from '@element-plus/icons-vue'
+import { User, Lock, Star, Monitor, Timer, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '../stores/user'
 
@@ -229,184 +258,287 @@ async function handleRegister() {
 .orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(6px);
+  filter: blur(80px); /* 增加模糊度使光斑更柔和 */
 }
 
 .orb-1 {
-  width: 520px;
-  height: 520px;
-  background: radial-gradient(circle, rgba(56, 189, 248, 0.18), transparent 68%);
-  top: -160px;
-  right: -80px;
-  animation: float 10s ease-in-out infinite;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.2), transparent 70%);
+  top: -200px;
+  right: -100px;
+  animation: float 15s ease-in-out infinite;
 }
 
 .orb-2 {
-  width: 440px;
-  height: 440px;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.16), transparent 70%);
-  bottom: -140px;
-  left: -120px;
-  animation: float 12s ease-in-out infinite reverse;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.15), transparent 70%);
+  bottom: -150px;
+  left: -150px;
+  animation: float 18s ease-in-out infinite reverse;
 }
 
 .grid-glow {
   position: absolute;
-  inset: 8% 12%;
-  border-radius: 36px;
-  border: 1px solid var(--border-soft);
-  background: var(--bg-elevated);
-  background-size: 34px 34px;
-  mask-image: radial-gradient(circle at center, black 48%, transparent 82%);
+  inset: 0;
+  background-image: radial-gradient(circle at 1px 1px, var(--border-soft) 1px, transparent 0);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(circle at center, black, transparent 80%);
+  opacity: 0.3;
 }
 
 @keyframes float {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-22px) scale(1.04); }
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.05); }
+  66% { transform: translate(-20px, 20px) scale(0.95); }
 }
 
-.login-shell {
+.login-container {
   position: relative;
-  z-index: 1;
-  width: min(1120px, 100%);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 440px;
-  gap: 22px;
-  align-items: stretch;
-}
-
-.login-brand-panel,
-.login-card {
-  border-radius: 28px;
+  z-index: 10;
+  width: min(1000px, 100%);
+  min-height: 640px;
+  display: flex;
+  background: var(--bg-surface);
+  border-radius: 32px;
+  overflow: hidden;
+  box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.12);
   border: 1px solid var(--border-soft);
-  box-shadow: var(--shadow-sidebar);
-  backdrop-filter: blur(20px);
+  animation: cardEnter 0.8s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.login-brand-panel {
-  padding: 40px;
+@keyframes cardEnter {
+  from { opacity: 0; transform: translateY(40px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* --- Brand Section Styles --- */
+.brand-section {
+  flex: 1.1;
+  background: #0b1930; /* 默认深色背景，解决对比度问题 */
+  background: linear-gradient(165deg, #0b1930 0%, #1a365d 100%);
+  padding: 60px;
+  color: #fff;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  background: var(--bg-elevated);
-  color: #e7f0fb;
+  justify-content: space-between;
+  position: relative;
 }
 
-.login-brand-panel h1 {
-  margin: 16px 0 0;
-  font-size: 38px;
-  line-height: 1.1;
-  font-weight: 800;
+.brand-section::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03' fill-rule='evenodd'%3E%3Ccircle cx='3' cy='3' r='3'/%3E%3Ccircle cx='13' cy='13' r='3'/%3E%3C/g%3E%3C/svg%3E");
+  pointer-events: none;
 }
 
-.brand-desc {
-  margin: 18px 0 0;
-  max-width: 480px;
-  line-height: 1.85;
-  color: rgba(231, 240, 251, 0.82);
-}
-
-.brand-points {
-  margin-top: 28px;
+.brand-header {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
-.brand-point {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  line-height: 1.75;
-  color: rgba(231, 240, 251, 0.88);
-}
-
-.point-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  margin-top: 8px;
-  flex: 0 0 auto;
-}
-
-.login-card {
-  background: var(--bg-elevated);
-  padding: 34px;
-}
-
-.logo-area {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  margin-bottom: 26px;
-}
-
-.logo-icon {
-  width: 56px;
-  height: 56px;
-  background: var(--bg-primary);
-  border-radius: 18px;
+.brand-logo {
+  width: 64px;
+  height: 64px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  flex: 0 0 auto;
-  box-shadow: var(--shadow-soft);
+  color: #60a5fa;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
 }
 
-.logo-area h2 {
-  margin: 10px 0 0;
-  font-size: 24px;
+.brand-header h1 {
+  font-size: 28px;
+  font-weight: 800;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.brand-tagline {
+  font-size: 16px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 48px;
+}
+
+.brand-features {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.feature-item {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.feature-icon {
+  width: 44px;
+  height: 44px;
+  background: rgba(59, 130, 246, 0.15);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #60a5fa;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.feature-text h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.feature-text p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0;
+}
+
+.brand-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+/* --- Form Section Styles --- */
+.form-section {
+  flex: 0.9;
+  padding: 60px 50px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+}
+
+.form-header {
+  margin-bottom: 32px;
+}
+
+.form-header h2 {
+  font-size: 28px;
   font-weight: 800;
   color: var(--text-primary);
+  margin: 0 0 8px;
 }
 
-.logo-area p {
-  margin: 10px 0 0;
-  font-size: 14px;
-  line-height: 1.7;
+.form-header p {
+  font-size: 15px;
   color: var(--text-secondary);
+  margin: 0;
 }
 
-.login-tabs :deep(.el-tabs__nav-wrap::after) {
+.custom-tabs :deep(.el-tabs__header) {
+  margin-bottom: 30px;
+}
+
+.custom-tabs :deep(.el-tabs__nav-wrap::after) {
   display: none;
+}
+
+.custom-tabs :deep(.el-tabs__item) {
+  font-size: 16px;
+  font-weight: 600;
+  padding: 0 24px;
+  height: 40px;
+  line-height: 40px;
+}
+
+.auth-form {
+  margin-top: 10px;
+}
+
+.auth-form :deep(.el-form-item) {
+  margin-bottom: 24px;
+}
+
+.auth-form :deep(.el-input__wrapper) {
+  padding-left: 15px;
+  height: 52px;
+}
+
+.form-actions {
+  margin-top: 32px;
 }
 
 .submit-btn {
   width: 100%;
-  margin-top: 8px;
-  border-radius: 14px;
-  height: 48px;
+  height: 52px;
   font-size: 16px;
+  font-weight: 700;
+  border-radius: 16px;
+  background: var(--bg-primary);
+  box-shadow: 0 12px 24px -6px rgba(37, 99, 235, 0.25);
 }
 
-@media (max-width: 980px) {
-  .login-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .login-brand-panel {
-    padding: 30px;
-  }
-
-  .login-brand-panel h1 {
-    font-size: 30px;
-  }
+.submit-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 32px -6px rgba(37, 99, 235, 0.35);
 }
 
-@media (max-width: 640px) {
-  .login-page {
-    padding: 14px;
-  }
+.hint-text {
+  margin-top: 24px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
 
-  .login-card,
-  .login-brand-panel {
-    padding: 24px;
-  }
-
-  .logo-area {
+/* --- Responsive Adjustments --- */
+@media (max-width: 900px) {
+  .login-container {
     flex-direction: column;
+    min-height: auto;
+    width: 480px;
+    border-radius: 24px;
+  }
+
+  .brand-section {
+    padding: 40px;
+    flex: none;
+  }
+
+  .brand-tagline, .brand-features, .brand-footer {
+    display: none;
+  }
+
+  .brand-header {
+    margin-bottom: 0;
+    justify-content: center;
+  }
+
+  .form-section {
+    padding: 40px;
+  }
+}
+
+@media (max-width: 520px) {
+  .login-page {
+    padding: 16px;
+  }
+  
+  .login-container {
+    width: 100%;
+  }
+
+  .form-section {
+    padding: 32px 24px;
   }
 }
 </style>
