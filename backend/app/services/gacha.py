@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import GameRole, MihoyoAccount
@@ -516,48 +517,47 @@ class GachaService:
         pool_name_map: dict[str, str],
     ) -> tuple[int, int]:
         normalized_game_uid = self._normalize_game_uid(game_uid)
-        record_ids = [str(item.get("id") or "").strip() for item in items if item.get("id")]
-        existing_result = await self.db.execute(
-            select(GachaRecord.record_id).where(
-                and_(
-                    GachaRecord.account_id == account_id,
-                    GachaRecord.game == game,
-                    GachaRecord.game_uid == normalized_game_uid,
-                    GachaRecord.record_id.in_(record_ids),
-                )
-            )
-        )
-        existing_ids = set(existing_result.scalars().all())
-
-        inserted_count = 0
         duplicate_count = 0
+        rows_to_insert: list[dict[str, Any]] = []
+        seen_record_ids: set[str] = set()
         for item in items:
             record_id = str(item.get("id") or "").strip()
             if not record_id:
                 continue
-            if record_id in existing_ids:
+
+            # 星铁全池扫描和上游异常页里都可能把同一条 `record_id` 重复返回。
+            # 这里只靠“先查数据库再逐条 add”并不能覆盖同页重复、跨请求竞态或并发导入：
+            # 查询结束到 flush 之间，目标唯一键依然可能被别的写入占住，最终把用户可恢复的重复数据放大成 500。
+            # 因此这里先做页内去重，再把最终幂等性交给 MySQL 唯一键 + IGNORE 写入收口。
+            if record_id in seen_record_ids:
                 duplicate_count += 1
                 continue
 
+            seen_record_ids.add(record_id)
             pool_type = str(item.get("gacha_type") or "").strip() or "unknown"
-            self.db.add(
-                GachaRecord(
-                    account_id=account_id,
-                    game=game,
-                    game_uid=normalized_game_uid,
-                    record_id=record_id,
-                    pool_type=pool_type,
-                    pool_name=str(item.get("pool_name") or pool_name_map.get(pool_type, pool_type)),
-                    item_name=str(item.get("name") or "未知物品"),
-                    item_type=item.get("item_type"),
-                    rank_type=str(item.get("rank_type") or "0"),
-                    time_text=str(item.get("time") or ""),
-                )
+            rows_to_insert.append(
+                {
+                    "account_id": account_id,
+                    "game": game,
+                    "game_uid": normalized_game_uid,
+                    "record_id": record_id,
+                    "pool_type": pool_type,
+                    "pool_name": str(item.get("pool_name") or pool_name_map.get(pool_type, pool_type)),
+                    "item_name": str(item.get("name") or "未知物品"),
+                    "item_type": item.get("item_type"),
+                    "rank_type": str(item.get("rank_type") or "0"),
+                    "time_text": str(item.get("time") or ""),
+                    "imported_at": utc_now_naive(),
+                }
             )
-            inserted_count += 1
-            existing_ids.add(record_id)
 
-        await self.db.flush()
+        if not rows_to_insert:
+            return 0, duplicate_count
+
+        insert_stmt = mysql_insert(GachaRecord).values(rows_to_insert).prefix_with("IGNORE")
+        result = await self.db.execute(insert_stmt)
+        inserted_count = int(result.rowcount or 0)
+        duplicate_count += len(rows_to_insert) - inserted_count
         return inserted_count, duplicate_count
 
     async def get_summary(self, *, account_id: int, game: str, game_uid: str) -> GachaSummaryResponse:

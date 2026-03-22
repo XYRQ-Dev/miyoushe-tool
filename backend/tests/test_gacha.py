@@ -114,6 +114,22 @@ class FakeScalarResult:
         return self._value
 
 
+class FakeScalarListResult:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return self._values
+
+
+class FakeExecuteResult:
+    def __init__(self, scalar_values):
+        self._scalar_values = scalar_values
+
+    def scalars(self):
+        return FakeScalarListResult(self._scalar_values)
+
+
 class FakeBeginContext:
     def __init__(self, connection):
         self._connection = connection
@@ -547,6 +563,34 @@ class GachaRateLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("gacha_type=11", response.source_url_masked)
         db.commit.assert_awaited_once()
 
+    async def test_save_page_records_treats_unique_conflict_as_duplicate_instead_of_crashing(self):
+        from app.services.gacha import GachaService
+
+        db = AsyncMock()
+        db.execute.return_value = type("FakeInsertResult", (), {"rowcount": 0})()
+        service = GachaService(db)
+
+        inserted_count, duplicate_count = await service._save_page_records(
+            account_id=1,
+            game="starrail",
+            game_uid="80001",
+            items=[
+                {
+                    "id": "1300003",
+                    "name": "艾丝妲",
+                    "item_type": "角色",
+                    "rank_type": "4",
+                    "gacha_type": "11",
+                    "time": "2026-03-18 12:00:00",
+                }
+            ],
+            pool_name_map={"11": "角色活动跃迁"},
+        )
+
+        self.assertEqual(inserted_count, 0)
+        self.assertEqual(duplicate_count, 1)
+        db.execute.assert_awaited_once()
+
     async def test_import_records_does_not_commit_partial_starrail_results_when_later_pool_fails(self):
         from app.services.gacha import GachaService
 
@@ -842,6 +886,124 @@ class GachaTests(MySqlIsolatedAsyncioTestCase):
 
         self.assertEqual(response.game_uid, "10002")
         self.assertEqual(stored.game_uid, "10002")
+
+    async def test_import_same_uid_twice_counts_duplicates_instead_of_raising(self):
+        payload = {
+            "retcode": 0,
+            "message": "OK",
+            "data": {
+                "list": [
+                    {
+                        "id": "1300001",
+                        "name": "黑塔",
+                        "item_type": "角色",
+                        "rank_type": "4",
+                        "gacha_type": "11",
+                        "time": "2026-03-18 12:00:00",
+                    }
+                ]
+            },
+        }
+        user, account, _roles = await self._seed_account_with_roles(
+            [{"game_biz": "hkrpg_cn", "game_uid": "80001", "nickname": "开拓者", "region": "prod_gf_cn"}]
+        )
+
+        async with await self._new_session() as session:
+            with patch("app.services.gacha.httpx.AsyncClient", return_value=FakeAsyncClient([payload])):
+                first = await import_gacha_records(
+                    GachaImportRequest(
+                        account_id=account.id,
+                        game="starrail",
+                        game_uid="80001",
+                        import_url=self._build_starrail_import_url(gacha_type="11"),
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+            with patch("app.services.gacha.httpx.AsyncClient", return_value=FakeAsyncClient([payload])):
+                second = await import_gacha_records(
+                    GachaImportRequest(
+                        account_id=account.id,
+                        game="starrail",
+                        game_uid="80001",
+                        import_url=self._build_starrail_import_url(gacha_type="11"),
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+            total = (
+                await session.execute(
+                    select(func.count(GachaRecord.id)).where(
+                        GachaRecord.account_id == account.id,
+                        GachaRecord.game == "starrail",
+                        GachaRecord.game_uid == "80001",
+                    )
+                )
+            ).scalar_one()
+
+        self.assertEqual(first.inserted_count, 1)
+        self.assertEqual(first.duplicate_count, 0)
+        self.assertEqual(second.inserted_count, 0)
+        self.assertEqual(second.duplicate_count, 1)
+        self.assertEqual(total, 1)
+
+    async def test_import_same_page_duplicate_record_ids_do_not_raise_integrity_error(self):
+        payload = {
+            "retcode": 0,
+            "message": "OK",
+            "data": {
+                "list": [
+                    {
+                        "id": "1300002",
+                        "name": "三月七",
+                        "item_type": "角色",
+                        "rank_type": "4",
+                        "gacha_type": "11",
+                        "time": "2026-03-18 12:00:00",
+                    },
+                    {
+                        "id": "1300002",
+                        "name": "三月七",
+                        "item_type": "角色",
+                        "rank_type": "4",
+                        "gacha_type": "11",
+                        "time": "2026-03-18 12:00:00",
+                    },
+                ]
+            },
+        }
+        user, account, _roles = await self._seed_account_with_roles(
+            [{"game_biz": "hkrpg_cn", "game_uid": "80001", "nickname": "开拓者", "region": "prod_gf_cn"}]
+        )
+
+        async with await self._new_session() as session:
+            with patch("app.services.gacha.httpx.AsyncClient", return_value=FakeAsyncClient([payload])):
+                response = await import_gacha_records(
+                    GachaImportRequest(
+                        account_id=account.id,
+                        game="starrail",
+                        game_uid="80001",
+                        import_url=self._build_starrail_import_url(gacha_type="11"),
+                    ),
+                    current_user=user,
+                    db=session,
+                )
+
+            total = (
+                await session.execute(
+                    select(func.count(GachaRecord.id)).where(
+                        GachaRecord.account_id == account.id,
+                        GachaRecord.game == "starrail",
+                        GachaRecord.game_uid == "80001",
+                    )
+                )
+            ).scalar_one()
+
+        self.assertEqual(response.inserted_count, 1)
+        self.assertEqual(response.duplicate_count, 1)
+        self.assertEqual(total, 1)
 
     async def test_get_owned_account_for_game_requires_matching_game_uid_role(self):
         user, account, _roles = await self._seed_account_with_roles(
