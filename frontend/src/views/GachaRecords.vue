@@ -28,121 +28,232 @@
     <el-tabs v-model="activeTab" class="gacha-tabs" @tab-change="handleTabChange">
       <!-- 总览 Tab -->
       <el-tab-pane label="数据总览" name="overview">
-        <div class="stats-grid">
-          <div class="stat-card stat-card-primary">
-            <div class="stat-label">累计抽数</div>
-            <div class="stat-value">{{ summary.total_count || 0 }}</div>
-            <div class="stat-note">保存的总抽数</div>
+        <div class="stats-premium-grid">
+          <div class="stat-premium-card highlight">
+            <div class="card-inner">
+              <el-icon class="card-icon"><TrendCharts /></el-icon>
+              <div class="stat-body">
+                <div class="label">累计消耗抽数</div>
+                <div class="value">{{ summary.total_count || 0 }}</div>
+              </div>
+            </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">五星次数</div>
-            <div class="stat-value">{{ summary.five_star_count || 0 }}</div>
-            <div class="stat-note">累计出金总数</div>
+          <div class="stat-premium-card rank-5">
+            <div class="card-inner">
+              <el-icon class="card-icon"><StarFilled /></el-icon>
+              <div class="stat-body">
+                <div class="label">五星产出总计</div>
+                <div class="value">{{ summary.five_star_count || 0 }}</div>
+              </div>
+            </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">四星次数</div>
-            <div class="stat-value">{{ summary.four_star_count || 0 }}</div>
-            <div class="stat-note">累计紫光总数</div>
+          <div class="stat-premium-card rank-4">
+            <div class="card-inner">
+              <el-icon class="card-icon"><StarFilled /></el-icon>
+              <div class="stat-body">
+                <div class="label">四星产出总计</div>
+                <div class="value">{{ summary.four_star_count || 0 }}</div>
+              </div>
+            </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">最近五星</div>
-            <div class="stat-value stat-value-compact">{{ summary.latest_five_star_name || '暂无' }}</div>
-            <div class="stat-note">{{ summary.latest_five_star_time || '导入后显示' }}</div>
+          <div class="stat-premium-card latest">
+            <div class="card-inner">
+              <div class="item-icon-small" v-if="summary.latest_five_star_name">
+                <ItemIcon :name="summary.latest_five_star_name" :game="selectedGame" rank-type="5" circle />
+              </div>
+              <div class="stat-body">
+                <div class="label">最近五星</div>
+                <div class="value compact">{{ summary.latest_five_star_name || '暂无' }}</div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="content-grid">
-          <el-card class="pool-card panel-card" shadow="never">
+        <div class="main-content-split">
+          <el-card class="pool-summary-card panel-card" shadow="never">
             <template #header>
-              <div class="section-title">卡池分布</div>
+              <div class="panel-title-row">
+                <el-icon><Collection /></el-icon>
+                <span>各卡池分布</span>
+              </div>
             </template>
-            <div v-if="summary.pool_summaries?.length" class="pool-list">
-              <div v-for="pool in summary.pool_summaries" :key="pool.pool_type" class="pool-item">
-                <div class="pool-head">
-                  <span class="pool-name">{{ pool.pool_name }}</span>
-                  <span class="pool-count">{{ pool.count }} 抽</span>
+            <div v-if="summary.pool_summaries?.length" class="pool-vertical-list">
+              <div v-for="pool in summary.pool_summaries" :key="pool.pool_type" class="pool-row">
+                <div class="row-top">
+                  <span class="name">{{ pool.pool_name }}</span>
+                  <span class="count">{{ pool.count }} 抽</span>
                 </div>
-                <div class="pool-bar">
-                  <span class="pool-bar-fill" :style="{ width: `${getPoolRatio(pool.count)}%` }" />
+                <div class="bar-track">
+                  <div class="bar-fill" :style="{ width: `${getPoolRatio(pool.count)}%` }"></div>
                 </div>
               </div>
             </div>
-            <el-empty v-else description="暂无统计数据" :image-size="72" />
+            <el-empty v-else description="暂无分布数据" :image-size="64" />
           </el-card>
 
-          <el-card class="record-card panel-card" shadow="never">
+          <el-card class="all-records-card panel-card" shadow="never">
             <template #header>
-              <div class="section-title">全部记录</div>
+              <div class="panel-title-row">
+                <el-icon><Histogram /></el-icon>
+                <span>全量抽卡记录</span>
+              </div>
             </template>
-            <GachaTable :records="records" :loading="recordsLoading" :total="recordTotal" :page="currentPage" @page-change="handlePageChange" />
+            
+            <el-skeleton :loading="recordsLoading" animated :rows="6">
+              <template #default>
+                <div v-if="records.length === 0">
+                  <el-empty description="暂无抽卡记录" :image-size="88" />
+                </div>
+                <div v-else>
+                  <el-table :data="records" class="custom-record-table" stripe>
+                    <el-table-column label="物品" min-width="180">
+                      <template #default="{ row }">
+                        <div class="item-cell">
+                          <ItemIcon :name="row.item_name" :game="selectedGame" :rank-type="row.rank_type" size="small" />
+                          <span class="item-name">{{ row.item_name }}</span>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="星级" width="100" align="center">
+                      <template #default="{ row }">
+                        <div class="rank-tag" :class="'rank-' + row.rank_type">
+                          <span>{{ row.rank_type }}</span>
+                          <el-icon :size="12"><StarFilled /></el-icon>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="item_type" label="类型" width="90" />
+                    <el-table-column prop="pool_name" label="卡池" min-width="130" />
+                    <el-table-column prop="time_text" label="时间" width="160" />
+                  </el-table>
+                  <div class="record-footer">
+                    <el-pagination
+                      background
+                      layout="total, sizes, prev, pager, next"
+                      v-model:current-page="currentPage"
+                      v-model:page-size="pageSize"
+                      :page-sizes="[20, 50, 100]"
+                      :total="recordTotal"
+                      @current-change="handlePageChange"
+                      @size-change="handleSizeChange"
+                    />
+                  </div>
+                </div>
+              </template>
+            </el-skeleton>
           </el-card>
         </div>
       </el-tab-pane>
 
-      <!-- 各个卡池 Tab -->
       <el-tab-pane
         v-for="pool in summary.pool_summaries"
         :key="pool.pool_type"
         :label="pool.pool_name"
         :name="pool.pool_type"
       >
-        <div class="pool-detail-layout">
-          <div class="pool-stats-row">
-            <div class="pool-metric-card">
-              <div class="metric-label">已垫抽数</div>
-              <div class="pity-value-group">
-                <span class="pity-number" :class="getPityColorClass(pool.current_pity)">{{ pool.current_pity }}</span>
-                <span class="pity-total">/ 90</span>
+        <div class="pool-detailed-view">
+          <div class="pool-top-stats">
+            <div class="pity-giant-card">
+              <div class="pity-label">当前已垫</div>
+              <div class="pity-display">
+                <span class="val" :class="getPityColorClass(pool.current_pity)">{{ pool.current_pity }}</span>
+                <span class="limit">/ 80</span>
               </div>
-              <el-progress
-                :percentage="Math.min(100, (pool.current_pity / 80) * 100)"
-                :stroke-width="10"
-                :show-text="false"
-                :color="getPityProgressColor(pool.current_pity)"
-                class="pity-progress"
-              />
-              <div class="metric-note">距离下次保底（参考值）</div>
-            </div>
-
-            <div class="pool-metric-card">
-              <div class="metric-label">平均出金</div>
-              <div class="metric-value">{{ calculateAvgPity(pool) }}</div>
-              <div class="metric-note">每 {{ pool.five_star_count > 0 ? '个五星消耗' : '池内总共' }}</div>
-            </div>
-
-            <div class="pool-metric-card">
-              <div class="metric-label">五星数量</div>
-              <div class="metric-value">{{ pool.five_star_count }}</div>
-              <div class="metric-note">占总抽数 {{ ((pool.five_star_count / pool.count) * 100).toFixed(2) }}%</div>
-            </div>
-
-            <div class="pool-metric-card">
-              <div class="metric-label">总计抽数</div>
-              <div class="metric-value">{{ pool.count }}</div>
-              <div class="metric-note">池内累计投入</div>
-            </div>
-          </div>
-
-          <div v-if="pool.five_star_history?.length" class="history-section">
-            <div class="section-title">出金历史</div>
-            <div class="five-star-timeline">
-              <div v-for="(item, idx) in pool.five_star_history" :key="idx" class="history-item">
-                <div class="history-pity" :class="getPityColorClass(item.pity_count)">
-                  {{ item.pity_count }}
+              <div class="pity-bar-container">
+                <div class="pity-bar-fill" 
+                  :style="{ 
+                    width: `${Math.min(100, (pool.current_pity / 80) * 100)}%`,
+                    backgroundColor: getPityProgressColor(pool.current_pity)
+                  }">
                 </div>
-                <div class="history-main">
-                  <div class="history-name">{{ item.item_name }}</div>
-                  <div class="history-time">{{ item.time_text }}</div>
-                </div>
+              </div>
+            </div>
+            
+            <div class="stats-mini-group">
+              <div class="mini-stat-item">
+                <div class="label">平均出金</div>
+                <div class="val">{{ calculateAvgPity(pool) }}</div>
+              </div>
+              <div class="mini-stat-item">
+                <div class="label">五星总数</div>
+                <div class="val">{{ pool.five_star_count }}</div>
+              </div>
+              <div class="mini-stat-item">
+                <div class="label">总计抽数</div>
+                <div class="val">{{ pool.count }}</div>
               </div>
             </div>
           </div>
 
-          <el-card class="record-card panel-card" shadow="never">
+          <!-- 五星序列 -->
+          <div v-if="pool.five_star_history?.length" class="history-vertical-wrap">
+            <div class="history-title-row">
+              <el-icon><Histogram /></el-icon>
+              <span>五星出金序列时间线</span>
+            </div>
+            <div class="history-vertical-list">
+              <div v-for="(item, idx) in pool.five_star_history" :key="idx" class="history-vertical-item">
+                <ItemIcon :name="item.item_name" :game="selectedGame" rank-type="5" circle />
+                <div class="item-main">
+                  <div class="item-name">{{ item.item_name }}</div>
+                  <div class="item-time">{{ item.time_text }}</div>
+                </div>
+                <div class="item-pity-tag" :class="getPityColorClass(item.pity_count)">
+                  {{ item.pity_count }} 抽
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <el-card class="pool-detail-record panel-card" shadow="never">
             <template #header>
-              <div class="section-title">{{ pool.pool_name }} 明细</div>
+              <div class="panel-title-row">
+                <el-icon><Collection /></el-icon>
+                <span>{{ pool.pool_name }} 详细明细</span>
+              </div>
             </template>
-            <GachaTable :records="records" :loading="recordsLoading" :total="recordTotal" :page="currentPage" @page-change="handlePageChange" />
+            <el-skeleton :loading="recordsLoading" animated :rows="6">
+              <template #default>
+                <div v-if="records.length === 0">
+                  <el-empty description="暂无抽卡记录" :image-size="88" />
+                </div>
+                <div v-else>
+                  <el-table :data="records" class="custom-record-table" stripe>
+                    <el-table-column label="物品" min-width="180">
+                      <template #default="{ row }">
+                        <div class="item-cell">
+                          <ItemIcon :name="row.item_name" :game="selectedGame" :rank-type="row.rank_type" size="small" />
+                          <span class="item-name">{{ row.item_name }}</span>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="星级" width="100" align="center">
+                      <template #default="{ row }">
+                        <div class="rank-tag" :class="'rank-' + row.rank_type">
+                          <span>{{ row.rank_type }}</span>
+                          <el-icon :size="12"><StarFilled /></el-icon>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="item_type" label="类型" width="90" />
+                    <el-table-column prop="pool_name" label="卡池" min-width="130" />
+                    <el-table-column prop="time_text" label="时间" width="160" />
+                  </el-table>
+                  <div class="record-footer">
+                    <el-pagination
+                      background
+                      layout="total, sizes, prev, pager, next"
+                      v-model:current-page="currentPage"
+                      v-model:page-size="pageSize"
+                      :page-sizes="[20, 50, 100]"
+                      :total="recordTotal"
+                      @current-change="handlePageChange"
+                      @size-change="handleSizeChange"
+                    />
+                  </div>
+                </div>
+              </template>
+            </el-skeleton>
           </el-card>
         </div>
       </el-tab-pane>
@@ -205,12 +316,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, useTemplateRef, h } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox, ElTable, ElTableColumn, ElTag, ElPagination, ElSkeleton, ElEmpty } from 'element-plus'
-import { Refresh, Upload } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, ElTable, ElTableColumn, ElTag, ElPagination, ElSkeleton, ElEmpty, ElIcon } from 'element-plus'
+import { Refresh, Upload, Histogram, Collection, TrendCharts, StarFilled } from '@element-plus/icons-vue'
 import { gachaApi } from '../api'
 import { resolveRouteAccountPrefill } from '../utils/accountRoutePrefill'
 import { resolveRouteGamePrefill } from '../utils/gameRoutePrefill'
 import { formatGachaRoleLabel, resolveRouteGameUidPrefill } from '../utils/gameUidRoutePrefill'
+import ItemIcon from '../components/ItemIcon.vue'
 
 // --- Types ---
 type GachaRole = { game: string; game_uid: string; nickname?: string | null; region?: string | null }
@@ -223,44 +335,6 @@ type GachaPool = {
   four_star_count: number
   current_pity: number
   five_star_history: Array<{ item_name: string; time_text: string; pity_count: number }>
-}
-
-// --- Inner Component: GachaTable ---
-// Using a functional component style for the table to avoid separate file
-const GachaTable = (props: { records: any[], loading: boolean, total: number, page: number }, { emit }: any) => {
-  return h('div', [
-    h(ElSkeleton, { loading: props.loading, animated: true, rows: 6 }, {
-      default: () => props.records.length === 0 
-        ? h(ElEmpty, { description: '暂无抽卡记录', imageSize: 88 })
-        : [
-            h(ElTable, { data: props.records, class: 'record-table', stripe: true }, {
-              default: () => [
-                h(ElTableColumn, { prop: 'time_text', label: '抽取时间', minWidth: '168' }),
-                h(ElTableColumn, { prop: 'pool_name', label: '卡池', minWidth: '132' }),
-                h(ElTableColumn, { prop: 'item_name', label: '物品', minWidth: '160' }),
-                h(ElTableColumn, { prop: 'item_type', label: '类型', width: '96' }),
-                h(ElTableColumn, { label: '星级', width: '108' }, {
-                  default: ({ row }: any) => h(ElTag, { 
-                    type: row.rank_type === '5' ? 'danger' : row.rank_type === '4' ? 'warning' : 'info',
-                    effect: 'dark', round: true 
-                  }, () => `${row.rank_type} 星`)
-                })
-              ]
-            }),
-            h('div', { class: 'record-footer' }, [
-              h('div', { class: 'record-total' }, `共 ${props.total} 条记录`),
-              h(ElPagination, {
-                background: true,
-                layout: 'prev, pager, next',
-                currentPage: props.page,
-                pageSize: 20,
-                total: props.total,
-                onCurrentChange: (val: number) => emit('page-change', val)
-              })
-            ])
-          ]
-    })
-  ])
 }
 
 // --- State ---
@@ -293,6 +367,7 @@ const summary = ref<{
 const records = ref<any[]>([])
 const recordTotal = ref(0)
 const currentPage = ref(1)
+const pageSize = ref(20)
 const latestImportMessage = ref('尚未执行导入')
 const uigfFileInput = useTemplateRef<HTMLInputElement>('uigfFileInput')
 const route = useRoute()
@@ -366,13 +441,19 @@ async function loadRecords() {
       game_uid: selectedGameUid.value,
       pool_type: activeTab.value === 'overview' ? undefined : activeTab.value,
       page: currentPage.value,
-      page_size: 20
+      page_size: pageSize.value
     })
     records.value = data.records || []
     recordTotal.value = data.total || 0
   } finally {
     recordsLoading.value = false
   }
+}
+
+function handleSizeChange(val: number) {
+  pageSize.value = val
+  currentPage.value = 1
+  loadRecords()
 }
 
 async function loadPageData() {
@@ -481,95 +562,143 @@ onMounted(loadPageData)
 </script>
 
 <style scoped>
-.gacha-page { width: 100%; display: flex; flex-direction: column; gap: 20px; }
-.section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.section-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
-.section-desc { margin-top: 4px; font-size: 13px; color: var(--text-secondary); }
+.gacha-page { width: 100%; display: flex; flex-direction: column; gap: 16px; }
 
-.global-filters { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+/* 筛选器 */
+.global-filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
 .filter-item { width: 220px; }
 
-.data-management-card { margin-top: 20px; }
-.data-actions-row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; margin-bottom: 16px; }
+/* 顶部高级统计卡片 */
+.stats-premium-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 12px; }
+.stat-premium-card {
+  padding: 16px 20px; border-radius: 16px; 
+  background: var(--bg-elevated); border: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-soft); transition: transform 0.3s;
+}
+.stat-premium-card:hover { transform: translateY(-2px); }
+.card-inner { display: flex; align-items: center; gap: 16px; overflow: hidden; }
+.card-icon { font-size: 24px; opacity: 0.8; flex-shrink: 0; }
+.stat-body { flex: 1; min-width: 0; }
+.stat-body .label { font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px; }
+.stat-body .value { font-size: 24px; font-weight: 800; font-family: var(--font-mono); }
+.stat-body .value.compact { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.stat-premium-card.rank-5 .card-icon, .stat-premium-card.rank-5 .value { color: #f3d144; }
+.stat-premium-card.rank-4 .card-icon, .stat-premium-card.rank-4 .value { color: #af89f5; }
+.stat-premium-card.highlight { background: linear-gradient(135deg, rgba(37,99,235,0.05), transparent), var(--bg-elevated); border-color: rgba(37,99,235,0.2); }
+
+/* 内容分栏 */
+.main-content-split { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+.panel-title-row { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
+
+.pool-vertical-list { display: flex; flex-direction: column; gap: 16px; }
+.pool-row .row-top { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.pool-row .name { font-weight: 600; }
+.pool-row .count { color: var(--text-secondary); }
+.bar-track { height: 6px; background: var(--bg-soft); border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--brand-primary); border-radius: 3px; }
+
+/* 详情视图 */
+.pool-detailed-view { display: flex; flex-direction: column; gap: 20px; padding-top: 8px; }
+.pool-top-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+.pity-giant-card {
+  padding: 24px; border-radius: 20px; background: var(--bg-elevated);
+  border: 1px solid var(--border-soft); text-align: center;
+}
+.pity-label { font-size: 13px; color: var(--text-tertiary); margin-bottom: 12px; }
+.pity-display { display: flex; align-items: baseline; justify-content: center; gap: 4px; margin-bottom: 16px; }
+.pity-display .val { font-size: 56px; font-weight: 900; line-height: 1; }
+.pity-display .limit { font-size: 16px; color: var(--text-tertiary); font-weight: 700; }
+.pity-bar-container { height: 8px; background: var(--bg-soft); border-radius: 4px; overflow: hidden; }
+.pity-bar-fill { height: 100%; transition: width 0.6s ease-out; }
+
+.stats-mini-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.mini-stat-item {
+  padding: 16px; border-radius: 16px; background: var(--bg-soft);
+  text-align: center; display: flex; flex-direction: column; justify-content: center;
+}
+.mini-stat-item .label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 6px; }
+.mini-stat-item .val { font-size: 20px; font-weight: 800; }
+
+/* 垂直历史列表 */
+.history-vertical-wrap { background: var(--bg-elevated); padding: 20px; border-radius: 20px; border: 1px solid var(--border-soft); }
+.history-title-row { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; margin-bottom: 16px; }
+.history-vertical-list { display: flex; flex-direction: column; gap: 10px; }
+.history-vertical-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px;
+  background: var(--bg-soft); border-radius: 12px;
+}
+.history-vertical-item .item-main { flex: 1; }
+.history-vertical-item .item-name { font-size: 14px; font-weight: 700; }
+.history-vertical-item .item-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.item-pity-tag { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 6px; }
+
+/* 表格定制 */
+.custom-record-table { border-radius: 12px; overflow: hidden; margin-top: 8px; }
+.item-cell { display: flex; align-items: center; gap: 12px; }
+.item-name { font-weight: 600; font-size: 14px; }
+.rank-tag { display: flex; align-items: center; gap: 2px; font-weight: 800; font-size: 13px; padding: 2px 8px; border-radius: 6px; width: fit-content; }
+.rank-5 { color: #f3d144; background: rgba(243,209,68,0.1); }
+.rank-4 { color: #af89f5; background: rgba(175,137,245,0.1); }
+
+.is-hard { color: #f56c6c !important; }
+.is-lucky { color: #67c23a !important; }
+.is-normal { color: var(--brand-primary) !important; }
+.history-vertical-item .item-pity-tag.is-hard { background: rgba(245,108,108,0.15); }
+.history-vertical-item .item-pity-tag.is-lucky { background: rgba(103,194,58,0.15); }
+.history-vertical-item .item-pity-tag.is-normal { background: rgba(37,99,235,0.1); }
+
+/* 底部同步卡片 */
+.data-management-card { margin-top: 12px; }
+.data-actions-row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; margin-bottom: 20px; }
 .inline-link-input { flex: 1; min-width: 300px; }
-.inline-link-input :deep(.el-input-group__append) { background-color: var(--brand-primary); color: white; border-color: var(--brand-primary); }
-.inline-link-input :deep(.el-input-group__append:hover) { opacity: 0.9; }
-.inline-link-input :deep(.el-button) { margin: -10px -20px; padding: 10px 20px; border-radius: 0; color: white; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 
-.backup-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
-.hidden-file-input { display: none; }
-.game-scope-hint { margin-top: 12px; font-size: 12px; line-height: 1.7; color: var(--text-secondary); }
-
-.gacha-tabs { margin-top: 0; }
-.gacha-tabs :deep(.el-tabs__item) { font-size: 15px; padding: 0 24px; height: 50px; }
-
-.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-.stat-card {
-  padding: 20px; border-radius: var(--radius-md); border: 1px solid var(--border-soft);
-  background: var(--bg-elevated); backdrop-filter: blur(10px);
+:deep(.record-footer) { 
+  margin-top: 24px; 
+  display: flex !important; 
+  justify-content: flex-end !important; 
+  align-items: center !important; 
+  width: 100% !important;
 }
-.stat-card-primary { background: radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 40%), var(--bg-elevated); border-color: var(--border-soft); }
-.stat-label { font-size: 13px; color: var(--text-secondary); }
-.stat-value { margin-top: 8px; font-size: 28px; font-weight: 800; color: var(--text-primary); }
-.stat-value-compact { font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stat-note { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
 
-.content-grid { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
-.pool-list { display: flex; flex-direction: column; gap: 12px; }
-.pool-item { padding: 12px; border-radius: 12px; background: var(--bg-surface-muted); }
-.pool-head { display: flex; justify-content: space-between; margin-bottom: 8px; }
-.pool-name { font-size: 13px; font-weight: 600; }
-.pool-count { font-size: 12px; color: var(--text-secondary); }
-.pool-bar { height: 6px; background: var(--border-soft); border-radius: 3px; overflow: hidden; }
-.pool-bar-fill { display: block; height: 100%; background: var(--bg-primary); border-radius: 3px; }
+:deep(.el-pagination.is-background .el-pager li:not(.is-active)) {
+  background-color: var(--bg-soft);
+  color: var(--text-secondary);
+  border-radius: 8px;
+}
+:deep(.el-pagination.is-background .el-pager li.is-active) {
+  background: var(--brand-primary);
+  color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(37,99,235,0.2);
+}
+:deep(.el-pagination.is-background .btn-prev), 
+:deep(.el-pagination.is-background .btn-next) {
+  background-color: var(--bg-soft);
+  border-radius: 8px;
+}
 
-.pool-detail-layout { display: flex; flex-direction: column; gap: 24px; padding-top: 10px; }
-.pool-stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
-.pool-metric-card {
-  padding: 20px; border-radius: 16px; background: var(--bg-soft); border: 1px solid var(--border-soft);
-  display: flex; flex-direction: column; align-items: center; text-align: center;
+/* 核心修复：隐藏原生文件输入 */
+.hidden-file-input { 
+  display: none !important; 
+  visibility: hidden !important; 
+  position: absolute !important; 
+  width: 0 !important; 
+  height: 0 !important; 
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
-.pity-value-group { margin: 12px 0; }
-.pity-number { font-size: 36px; font-weight: 900; }
-.pity-number.is-hard { color: var(--color-danger); }
-.pity-number.is-lucky { color: var(--color-success); }
-.pity-number.is-normal { color: var(--brand-primary); }
-.pity-total { font-size: 16px; color: var(--text-tertiary); margin-left: 4px; }
-.pity-progress { width: 100%; margin-bottom: 12px; }
-.metric-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-.metric-value { font-size: 28px; font-weight: 800; margin: 12px 0; }
-.metric-note { font-size: 12px; color: var(--text-tertiary); }
 
-.history-section { margin-bottom: 10px; }
-.five-star-timeline {
-  display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px;
-}
-.history-item {
-  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-  background: var(--bg-elevated); border: 1px solid var(--border-soft); border-radius: 12px;
-  min-width: 200px;
-}
-.history-pity {
-  width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  font-weight: 800; font-size: 16px; color: #fff;
-}
-.history-pity.is-hard { background: var(--color-danger); }
-.history-pity.is-lucky { background: var(--color-success); }
-.history-pity.is-normal { background: var(--brand-primary); }
-.history-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-.history-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.game-scope-hint { margin-top: 16px; font-size: 12px; color: var(--text-tertiary); }
 
-.record-footer { margin-top: 20px; display: flex; justify-content: space-between; align-items: center; }
-.record-total { font-size: 13px; color: var(--text-secondary); }
-
-@media (max-width: 1200px) {
-  .global-filters { flex-direction: column; align-items: stretch; }
-  .filter-item { width: 100%; }
-  .stats-grid, .pool-stats-row { grid-template-columns: repeat(2, 1fr); }
-  .content-grid { grid-template-columns: 1fr; }
+@media (max-width: 1024px) {
+  .stats-premium-grid { grid-template-columns: repeat(2, 1fr); }
+  .main-content-split { grid-template-columns: 1fr; }
+  .pool-top-stats { grid-template-columns: 1fr; }
 }
-@media (max-width: 768px) {
-  .stats-grid, .pool-stats-row { grid-template-columns: 1fr; }
-  .data-actions-row { flex-direction: column; }
+@media (max-width: 640px) {
+  .stats-premium-grid { grid-template-columns: 1fr; }
 }
 </style>
