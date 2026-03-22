@@ -113,6 +113,8 @@ export const adminApi = {
     smtp_sender_name: string
     smtp_sender_email: string
   }) => api.put('/admin/system-settings/email', data),
+  broadcastEmail: (data: { subject: string; body: string }) =>
+    api.post('/admin/notifications/broadcast-email', data),
 }
 
 // ===== 抽卡记录 API =====

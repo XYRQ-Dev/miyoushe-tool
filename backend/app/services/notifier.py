@@ -12,6 +12,7 @@
 
 import logging
 import hashlib
+import html
 import json
 from datetime import date
 from email.header import Header
@@ -202,6 +203,42 @@ LOGIN_STATE_EMAIL_TEMPLATE = Template("""
 </html>
 """)
 
+ADMIN_BROADCAST_EMAIL_TEMPLATE = Template("""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f5f9; margin: 0; padding: 12px; color: #1f2937; }
+    .container { max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 18px; overflow: hidden; box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08); }
+    .header { background: linear-gradient(160deg, #0f766e 0%, #0f766e 45%, #115e59 100%); color: #ffffff; padding: 24px 20px 18px; }
+    .header h1 { margin: 0; font-size: 22px; line-height: 1.3; }
+    .header p { margin: 8px 0 0; font-size: 13px; opacity: 0.92; }
+    .content { padding: 18px 16px; }
+    .notice { background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+    .notice .title { font-size: 15px; font-weight: 700; color: #115e59; margin-bottom: 6px; }
+    .notice .desc { font-size: 13px; color: #134e4a; line-height: 1.7; word-break: break-word; }
+    .footer { padding: 14px 16px 18px; text-align: center; color: #9ca3af; font-size: 12px; border-top: 1px solid #edf2f7; background: #fcfcfd; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>管理员通知</h1>
+        <p>{{ today }}</p>
+    </div>
+    <div class="content">
+        <div class="notice">
+            <div class="title">{{ subject }}</div>
+            <div class="desc">{{ body_html }}</div>
+        </div>
+    </div>
+    <div class="footer">此邮件由米游社自动签到系统发送</div>
+</div>
+</body>
+</html>
+""")
+
 
 class NotificationService:
     """邮件通知服务"""
@@ -285,6 +322,20 @@ class NotificationService:
 
     def _remember_notification(self, user_id: int, fingerprint: str, now):
         self._recent_notifications[(user_id, fingerprint)] = now
+
+    @staticmethod
+    def _build_smtp_kwargs(smtp_config: dict) -> dict:
+        kwargs = {
+            "hostname": smtp_config["hostname"],
+            "port": smtp_config["port"],
+            "username": smtp_config["username"],
+            "password": smtp_config["password"],
+        }
+        if smtp_config["use_ssl"]:
+            kwargs["use_tls"] = True
+        else:
+            kwargs["start_tls"] = True
+        return kwargs
 
     async def _load_smtp_config(self, db: AsyncSession) -> dict | None:
         """
@@ -442,6 +493,14 @@ class NotificationService:
             ordered_results=sorted(summary.results, key=self._result_sort_key),
         )
 
+        await self._send_html_email(
+            to_email=to_email,
+            subject=subject,
+            html_content=html_content,
+            smtp_config=smtp_config,
+        )
+
+    async def _send_html_email(self, *, to_email: str, subject: str, html_content: str, smtp_config: dict):
         msg = MIMEMultipart("alternative")
         sender_name = smtp_config.get("sender_name", "").strip()
         sender_email = smtp_config["sender_email"]
@@ -456,21 +515,28 @@ class NotificationService:
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(html_content, "html", "utf-8"))
+        await aiosmtplib.send(msg, **self._build_smtp_kwargs(smtp_config))
 
-        # 使用 aiosmtplib 异步发送
-        kwargs = {
-            "hostname": smtp_config["hostname"],
-            "port": smtp_config["port"],
-            "username": smtp_config["username"],
-            "password": smtp_config["password"],
-        }
+    async def send_admin_broadcast_email(self, *, to_email: str, subject: str, body: str, smtp_config: dict):
+        """
+        发送管理员公告邮件。
 
-        if smtp_config["use_ssl"]:
-            kwargs["use_tls"] = True
-        else:
-            kwargs["start_tls"] = True
-
-        await aiosmtplib.send(msg, **kwargs)
+        管理员填写的是纯文本正文，这里必须统一做 HTML 转义后再渲染模板；
+        否则后台一旦把 `<script>`、内联样式或残缺标签原样塞进邮件，既增加兼容噪音，也让排障边界失控。
+        """
+        normalized_subject = subject.strip()
+        safe_body_html = html.escape(body).replace("\n", "<br>")
+        html_content = ADMIN_BROADCAST_EMAIL_TEMPLATE.render(
+            today=date.today().isoformat(),
+            subject=normalized_subject,
+            body_html=safe_body_html,
+        )
+        await self._send_html_email(
+            to_email=to_email,
+            subject=f"[系统通知] {normalized_subject}",
+            html_content=html_content,
+            smtp_config=smtp_config,
+        )
 
     async def _send_login_state_email(self, to_email: str, account: MihoyoAccount, smtp_config: dict):
         """发送登录态失效通知邮件。"""
@@ -482,31 +548,12 @@ class NotificationService:
             account_uid=account.mihoyo_uid or "-",
             message=account.last_refresh_message or "网页登录态已失效，需要重新扫码",
         )
-
-        msg = MIMEMultipart("alternative")
-        sender_name = smtp_config.get("sender_name", "").strip()
-        sender_email = smtp_config["sender_email"]
-        msg["From"] = (
-            formataddr((str(Header(sender_name, "utf-8")), sender_email))
-            if sender_name
-            else sender_email
+        await self._send_html_email(
+            to_email=to_email,
+            subject=subject,
+            html_content=html_content,
+            smtp_config=smtp_config,
         )
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(html_content, "html", "utf-8"))
-
-        kwargs = {
-            "hostname": smtp_config["hostname"],
-            "port": smtp_config["port"],
-            "username": smtp_config["username"],
-            "password": smtp_config["password"],
-        }
-        if smtp_config["use_ssl"]:
-            kwargs["use_tls"] = True
-        else:
-            kwargs["start_tls"] = True
-
-        await aiosmtplib.send(msg, **kwargs)
 
 
 # 全局单例

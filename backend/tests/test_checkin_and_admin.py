@@ -15,6 +15,7 @@ from app.api.auth import get_me, register
 from app.api.admin import (
     get_email_settings,
     get_menu_visibility,
+    send_broadcast_email,
     update_email_settings,
     update_menu_visibility,
 )
@@ -22,9 +23,15 @@ from app.api.accounts import list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
 from app.api.tasks import execute_checkin, get_today_status, update_task_config
 from app.models.account import GameRole, MihoyoAccount
+from app.models.admin_operation_log import AdminOperationLog
 from app.models.system_setting import SystemSetting
 from app.models.task_log import TaskConfig, TaskLog
 from app.models.user import User
+from app.schemas.admin_notification import (
+    AdminBroadcastEmailFailure,
+    AdminBroadcastEmailRequest,
+    AdminBroadcastEmailResponse,
+)
 from app.schemas.system_setting import (
     AdminEmailSettingsUpdate,
     AdminMenuVisibilityItemUpdate,
@@ -32,6 +39,7 @@ from app.schemas.system_setting import (
 )
 from app.schemas.task_log import CheckinSummary, CheckinResult, TaskConfigCreate
 from app.schemas.user import UserCreate
+from app.services.admin_broadcast import AdminBroadcastService
 from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
 from app.services.login_state import LoginStateService
 from app.services.notifier import NotificationService
@@ -1048,6 +1056,167 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             read_back = await get_email_settings(admin=admin, db=session)
             self.assertTrue(read_back.smtp_password_configured)
             self.assertEqual(read_back.smtp_user, "mailer@example.com")
+
+    async def test_admin_broadcast_service_targets_only_active_users_with_bound_email_and_logs_summary(self):
+        async with await self._new_session() as session:
+            admin = User(username="broadcast-admin", password_hash="x", role="admin", is_active=True)
+            eligible = User(
+                username="eligible-user",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email=" eligible@example.com ",
+                email_notify=False,
+                notify_on="failure_only",
+            )
+            disabled = User(
+                username="disabled-user",
+                password_hash="x",
+                role="user",
+                is_active=False,
+                email="disabled@example.com",
+            )
+            no_email = User(
+                username="no-email-user",
+                password_hash="x",
+                role="user",
+                is_active=True,
+                email="   ",
+            )
+            session.add_all([admin, eligible, disabled, no_email])
+            await session.commit()
+            await session.refresh(admin)
+            await session.refresh(eligible)
+
+            service = AdminBroadcastService(session)
+            service._send_one = AsyncMock(return_value=None)
+
+            result = await service.broadcast_email(
+                admin=admin,
+                payload=AdminBroadcastEmailRequest(subject="系统维护通知", body="今晚维护"),
+            )
+
+            stored_log = (await session.execute(select(AdminOperationLog))).scalar_one()
+
+        self.assertEqual(result.recipient_count, 1)
+        self.assertEqual(result.sent_count, 1)
+        self.assertEqual(result.failed_count, 0)
+        self.assertEqual(result.operation_log_id, stored_log.id)
+        service._send_one.assert_awaited_once()
+        send_kwargs = service._send_one.await_args.kwargs
+        self.assertEqual(send_kwargs["recipient"].id, eligible.id)
+        self.assertEqual(send_kwargs["recipient"].email, " eligible@example.com ")
+        self.assertEqual(send_kwargs["subject"], "系统维护通知")
+        self.assertEqual(send_kwargs["body"], "今晚维护")
+        self.assertEqual(stored_log.operator_user_id, admin.id)
+        self.assertEqual(stored_log.action_type, "broadcast_email")
+        self.assertEqual(stored_log.subject, "系统维护通知")
+        self.assertEqual(stored_log.recipient_count, 1)
+        self.assertEqual(stored_log.sent_count, 1)
+        self.assertEqual(stored_log.failed_count, 0)
+        self.assertEqual(stored_log.failure_details_json, "[]")
+
+    async def test_admin_broadcast_service_rejects_when_no_eligible_recipient(self):
+        async with await self._new_session() as session:
+            admin = User(username="empty-broadcast-admin", password_hash="x", role="admin", is_active=True)
+            session.add(admin)
+            await session.commit()
+            await session.refresh(admin)
+
+            service = AdminBroadcastService(session)
+
+            with self.assertRaises(ValueError) as ctx:
+                await service.broadcast_email(
+                    admin=admin,
+                    payload=AdminBroadcastEmailRequest(subject="通知", body="正文"),
+                )
+
+        self.assertIn("当前没有已绑定邮箱且启用的用户", str(ctx.exception))
+
+    async def test_notification_service_sends_admin_broadcast_email_with_prefixed_subject_and_escaped_body(self):
+        async with await self._new_session() as session:
+            del session
+            service = NotificationService()
+            smtp_config = {
+                "hostname": "smtp.example.com",
+                "port": 465,
+                "username": "mailer@example.com",
+                "password": "secret",
+                "use_ssl": True,
+                "sender_name": "签到助手",
+                "sender_email": "mailer@example.com",
+            }
+
+            with patch("app.services.notifier.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+                await service.send_admin_broadcast_email(
+                    to_email="notify@example.com",
+                    subject="系统维护通知",
+                    body="第一行\n<script>alert(1)</script>",
+                    smtp_config=smtp_config,
+                )
+
+        msg = mock_send.await_args.args[0]
+        html_part = msg.get_payload()[0].get_payload(decode=True).decode("utf-8")
+        self.assertEqual(msg["Subject"], "[系统通知] 系统维护通知")
+        self.assertIn("第一行<br>&lt;script&gt;alert(1)&lt;/script&gt;", html_part)
+        self.assertIn("管理员通知", html_part)
+
+    async def test_send_admin_broadcast_email_returns_aggregated_result(self):
+        async with await self._new_session() as session:
+            admin = User(username="api-broadcast-admin", password_hash="x", role="admin", is_active=True)
+            session.add(admin)
+            await session.commit()
+            await session.refresh(admin)
+
+            expected = AdminBroadcastEmailResponse(
+                recipient_count=2,
+                sent_count=1,
+                failed_count=1,
+                failures=[
+                    AdminBroadcastEmailFailure(
+                        user_id=2,
+                        username="u2",
+                        email="u2@example.com",
+                        error="smtp timeout",
+                    )
+                ],
+                operation_log_id=9,
+            )
+
+            with patch("app.api.admin.AdminBroadcastService") as mock_service_cls:
+                mock_service = mock_service_cls.return_value
+                mock_service.broadcast_email = AsyncMock(return_value=expected)
+
+                result = await send_broadcast_email(
+                    payload=AdminBroadcastEmailRequest(subject="通知", body="正文"),
+                    admin=admin,
+                    db=session,
+                )
+
+        self.assertEqual(result, expected)
+
+    async def test_send_admin_broadcast_email_translates_validation_error_to_http_400(self):
+        async with await self._new_session() as session:
+            admin = User(username="api-broadcast-error-admin", password_hash="x", role="admin", is_active=True)
+            session.add(admin)
+            await session.commit()
+            await session.refresh(admin)
+
+            with patch("app.api.admin.AdminBroadcastService") as mock_service_cls:
+                mock_service = mock_service_cls.return_value
+                mock_service.broadcast_email = AsyncMock(
+                    side_effect=ValueError("系统 SMTP 未配置，无法发送群发通知")
+                )
+
+                with self.assertRaises(HTTPException) as ctx:
+                    await send_broadcast_email(
+                        payload=AdminBroadcastEmailRequest(subject="通知", body="正文"),
+                        admin=admin,
+                        db=session,
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("系统 SMTP 未配置", ctx.exception.detail)
 
     async def test_refresh_account_login_state_marks_valid_when_cookie_verifies(self):
         async with await self._new_session() as session:
