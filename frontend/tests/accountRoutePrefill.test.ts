@@ -220,6 +220,11 @@ assertSourceMatches(
   /reset:\s*\(params:\s*\{[\s\S]*?game_uid:\s*string[\s\S]*?\}\)\s*=>/,
   'gachaApi.reset 必须要求 game_uid',
 )
+assertSourceMatches(
+  gachaApiSource,
+  /broadcastEmail:\s*\(data:\s*\{[\s\S]*subject:\s*string[\s\S]*body:\s*string[\s\S]*\}\)\s*=>\s*api\.post\('\/admin\/notifications\/broadcast-email'/,
+  'adminApi.broadcastEmail 必须指向管理员群发邮件接口',
+)
 
 const gachaRecordsView = fs.readFileSync(
   path.resolve(import.meta.dirname, '../src/views/GachaRecords.vue'),
@@ -328,6 +333,21 @@ assertSourceOmits(
   adminMenusView,
   /isNotesMenuItem|实时便笺区块|首页便笺渲染与数据请求/,
   '管理页不应继续保留 notes 专属文案或判定分支',
+)
+
+const adminUsersView = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../src/views/AdminUsers.vue'),
+  'utf8',
+)
+assert.equal(
+  adminUsersView.includes('群发通知'),
+  true,
+  'AdminUsers.vue 需要提供群发通知入口',
+)
+assertSourceMatches(
+  adminUsersView,
+  /已绑定邮箱且账号启用的用户|忽略个人邮件通知开关/,
+  'AdminUsers.vue 需要明确说明管理员公告的收件规则，避免和个人通知偏好混淆',
 )
 
 console.log('accountRoutePrefill tests passed')

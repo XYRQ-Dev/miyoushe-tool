@@ -20,8 +20,13 @@ from app.schemas.system_setting import (
     AdminMenuVisibilityResponse,
     AdminMenuVisibilityUpdate,
 )
+from app.schemas.admin_notification import (
+    AdminBroadcastEmailRequest,
+    AdminBroadcastEmailResponse,
+)
 from app.schemas.user import UserResponse
 from app.api.auth import require_admin
+from app.services.admin_broadcast import AdminBroadcastService
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import encrypt_text
 
@@ -162,5 +167,23 @@ async def update_menu_visibility(
     del admin
     try:
         return await SystemSettingsService(db).update_menu_visibility(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/notifications/broadcast-email", response_model=AdminBroadcastEmailResponse)
+async def send_broadcast_email(
+    payload: AdminBroadcastEmailRequest,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    发送管理员公告邮件。
+
+    这里发的是系统级公告，不是用户个人签到通知，因此收件人只按“是否启用 + 是否绑定邮箱”筛选，
+    不能再受用户个人 `email_notify` / `notify_on` 偏好控制。
+    """
+    try:
+        return await AdminBroadcastService(db).broadcast_email(admin=admin, payload=payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
