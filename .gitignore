@@ -1,0 +1,42 @@
+# 环境变量
+.env
+
+# 本地路线图文档
+/docs/roadmap/2026-09-19-github-mihoyo-feature-recommendations.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Node
+node_modules/
+frontend/dist/
+# 前端构建/自动导入工具会在开发机本地生成类型声明文件。
+# 这些文件属于环境衍生产物，不应作为业务源码提交，否则不同开发机插件版本容易反复制造无意义 diff。
+frontend/auto-imports.d.ts
+frontend/components.d.ts
+# Playwright 调试目录、前端开发日志和输出目录都属于本地运行产物。
+# 如果把这类文件纳入版本库，会持续引入与业务功能无关的噪音变更，影响代码审查和提交边界判断。
+.playwright-cli/
+.agents
+.codex
+# Git worktree 是隔离开发工作区，不属于仓库源码；若误跟踪其内容，会把整套平行工作目录当成业务改动提交。
+.worktrees/
+frontend/codex-frontend-dev.stderr.log
+frontend/codex-frontend-dev.stdout.log
+output/
+
+# 数据
+data/
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+.DS_Store
+Thumbs.db
+
