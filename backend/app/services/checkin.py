@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import MihoyoAccount, GameRole
 from app.models.task_log import TaskLog
 from app.schemas.task_log import CheckinResult, CheckinSummary
+from app.services.geetest import parse_checkin_risk
 from app.services.login_state import LoginStateService
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_cookie
@@ -430,6 +431,32 @@ class CheckinService:
             headers=headers,
         )
         data = response.json()
+        # 极验识别必须在抛 CheckinApiError 之前。否则 1034 一类码会变成泛化失败，
+        # 日志看起来像维护或参数错误，用户无法判断该去官方页补签。
+        risk_info = parse_checkin_risk(data)
+        if risk_info is not None:
+            logger.warning(
+                "角色 %s 签到命中风控: kind=%s, has_gt=%s, has_challenge=%s, "
+                "risk_code=%s, retcode=%s, account_id=%s, game_biz=%s",
+                role.game_uid,
+                risk_info.kind,
+                risk_info.has_gt,
+                risk_info.has_challenge,
+                risk_info.risk_code,
+                risk_info.retcode,
+                account.id,
+                role.game_biz,
+            )
+            return CheckinResult(
+                account_id=role.account_id,
+                game_role_id=role.id,
+                status="risk",
+                message=risk_info.message,
+                account_nickname=account.nickname or account.mihoyo_uid or f"账号#{account.id}",
+                game_biz=role.game_biz,
+                game_nickname=role.nickname or role.game_uid,
+            )
+
         self._raise_for_api_error("执行签到", role.game_biz, data, ignored_codes={-5003})
 
         retcode = data.get("retcode", -1)
@@ -445,17 +472,6 @@ class CheckinService:
             )
 
         sign_data = data.get("data", {}) or {}
-        if sign_data.get("is_risk") or sign_data.get("gt"):
-            return CheckinResult(
-                account_id=role.account_id,
-                game_role_id=role.id,
-                status="risk",
-                message="签到触发风控验证，需要人工处理",
-                account_nickname=account.nickname or account.mihoyo_uid or f"账号#{account.id}",
-                game_biz=role.game_biz,
-                game_nickname=role.nickname or role.game_uid,
-            )
-
         return CheckinResult(
             account_id=role.account_id,
             game_role_id=role.id,

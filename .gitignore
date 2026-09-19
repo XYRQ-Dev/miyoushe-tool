@@ -2,7 +2,7 @@
 .env
 
 # 本地路线图文档
-/docs/roadmap/2026-09-19-github-mihoyo-feature-recommendations.md
+/docs/roadmap/
 
 # Python
 __pycache__/

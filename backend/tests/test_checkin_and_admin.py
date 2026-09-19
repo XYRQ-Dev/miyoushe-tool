@@ -44,6 +44,7 @@ from app.schemas.task_log import CheckinSummary, CheckinResult, TaskConfigCreate
 from app.schemas.user import UserCreate
 from app.services.admin_broadcast import AdminBroadcastService
 from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
+from app.services.geetest import GENERIC_RISK_MESSAGE, GEETEST_RISK_MESSAGE
 from app.services.login_state import LoginStateService
 from app.services.notifier import NotificationService
 from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, SchedulerService
@@ -68,6 +69,7 @@ class FakeClient:
         self.post_payload = post_payload
         self.last_get = None
         self.last_post = None
+        self.post_calls = []
 
     async def get(self, url, **kwargs):
         self.last_get = {"url": url, **kwargs}
@@ -75,6 +77,7 @@ class FakeClient:
 
     async def post(self, url, **kwargs):
         self.last_post = {"url": url, **kwargs}
+        self.post_calls.append(self.last_post)
         return FakeResponse(self.post_payload)
 
 
@@ -470,24 +473,88 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         self.assertIsNone(naive_now.tzinfo)
         self.assertLess(abs((aware_now.replace(tzinfo=None) - naive_now).total_seconds()), 2)
 
+    async def _do_sign_with_payload(self, session, post_payload):
+        service = CheckinService(session)
+        role = GameRole(id=2, account_id=1, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn")
+        client = FakeClient(post_payload=post_payload)
+        result = await service._do_sign(
+            client,
+            "ltuid=1;",
+            CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
+            MihoyoAccount(id=1, user_id=1, nickname="测试账号"),
+            role,
+            ("device-id", "device-fp"),
+        )
+        return result, client
+
     async def test_do_sign_sends_uid_as_string_and_recognizes_risk(self):
         async with await self._new_session() as session:
-            service = CheckinService(session)
-            role = GameRole(id=2, account_id=1, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn")
-            client = FakeClient(post_payload={"retcode": 0, "data": {"is_risk": True, "gt": "captcha"}})
-
-            result = await service._do_sign(
-                client,
-                "ltuid=1;",
-                CheckinGameConfig(act_id="e202304121516551", sign_game="hkrpg"),
-                MihoyoAccount(id=1, user_id=1, nickname="测试账号"),
-                role,
-                ("device-id", "device-fp"),
+            result, client = await self._do_sign_with_payload(
+                session,
+                {"retcode": 0, "data": {"is_risk": True, "gt": "captcha", "challenge": "ch"}},
             )
 
         sent_body = json.loads(client.last_post["content"])
         self.assertEqual(sent_body["uid"], "10001")
         self.assertEqual(result.status, "risk")
+        self.assertEqual(result.message, GEETEST_RISK_MESSAGE)
+        self.assertEqual(len(client.post_calls), 1)
+        self.assertNotIn("x-rpc-challenge", client.last_post["headers"])
+
+    async def test_do_sign_treats_success_one_as_risk_not_success(self):
+        async with await self._new_session() as session:
+            result, client = await self._do_sign_with_payload(
+                session,
+                {"retcode": 0, "data": {"success": 1}},
+            )
+
+        self.assertEqual(result.status, "risk")
+        self.assertEqual(result.message, GENERIC_RISK_MESSAGE)
+        self.assertEqual(len(client.post_calls), 1)
+
+    async def test_do_sign_treats_nonzero_risk_code_without_tokens_as_risk(self):
+        async with await self._new_session() as session:
+            result, _client = await self._do_sign_with_payload(
+                session,
+                {"retcode": 0, "data": {"risk_code": 375}},
+            )
+
+        self.assertEqual(result.status, "risk")
+        self.assertEqual(result.message, GENERIC_RISK_MESSAGE)
+
+    async def test_do_sign_treats_geetest_retcode_as_risk_instead_of_api_error(self):
+        async with await self._new_session() as session:
+            result, client = await self._do_sign_with_payload(
+                session,
+                {"retcode": 1034, "message": "not login"},
+            )
+
+        self.assertEqual(result.status, "risk")
+        self.assertEqual(result.message, GEETEST_RISK_MESSAGE)
+        self.assertEqual(len(client.post_calls), 1)
+        self.assertNotIn("x-rpc-challenge", client.last_post["headers"])
+
+    async def test_do_sign_keeps_already_signed_for_minus_5003(self):
+        async with await self._new_session() as session:
+            result, _client = await self._do_sign_with_payload(
+                session,
+                {"retcode": -5003, "message": "already signed"},
+            )
+
+        self.assertEqual(result.status, "already_signed")
+        self.assertEqual(result.message, "今日已签到")
+
+    async def test_do_sign_succeeds_when_success_is_zero_without_risk(self):
+        async with await self._new_session() as session:
+            result, client = await self._do_sign_with_payload(
+                session,
+                {"retcode": 0, "data": {"success": 0, "is_risk": False, "total_sign_day": 12}},
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.total_sign_days, 12)
+        self.assertEqual(len(client.post_calls), 1)
+        self.assertNotIn("x-rpc-challenge", client.last_post["headers"])
 
     async def test_get_sign_info_raises_structured_error_when_upstream_fails(self):
         async with await self._new_session() as session:

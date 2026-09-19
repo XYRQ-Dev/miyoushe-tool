@@ -36,6 +36,16 @@
           <el-icon :size="24"><Warning /></el-icon>
         </div>
         <div class="stat-info">
+          <div class="stat-value">{{ status.risk_today || 0 }}</div>
+          <div class="stat-label">今日风控</div>
+        </div>
+      </div>
+
+      <div class="stat-card" style="--accent: #64748b">
+        <div class="stat-icon">
+          <el-icon :size="24"><Clock /></el-icon>
+        </div>
+        <div class="stat-info">
           <div class="stat-value">{{ status.pending || 0 }}</div>
           <div class="stat-label">待签到</div>
         </div>
@@ -61,6 +71,7 @@
           <span>签到结果</span>
           <el-tag :type="summaryType" size="small">
             成功 {{ summary.success }} / 失败 {{ summary.failed }}
+            <template v-if="summary.risk"> / 风控 {{ summary.risk }}</template>
           </el-tag>
         </div>
       </template>
@@ -88,17 +99,12 @@
           v-for="day in calendar"
           :key="day.date"
           class="calendar-day"
-          :class="{
-            'day-success': day.success > 0 && day.failed === 0,
-            'day-partial': day.success > 0 && day.failed > 0,
-            'day-failed': day.total > 0 && day.success === 0,
-            'day-empty': day.total === 0,
-          }"
+          :class="calendarDayClass(day)"
         >
           <div class="day-date">{{ formatDate(day.date) }}</div>
           <div class="day-status">
             <template v-if="day.total > 0">
-              <el-icon v-if="day.failed === 0"><CircleCheck /></el-icon>
+              <el-icon v-if="day.failed === 0 && !(day.risk > 0)"><CircleCheck /></el-icon>
               <el-icon v-else><Warning /></el-icon>
             </template>
             <span v-else class="day-dash">-</span>
@@ -115,7 +121,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  User, CircleCheck, CircleClose, Warning, Refresh,
+  User, CircleCheck, CircleClose, Warning, Refresh, Clock,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { logApi, taskApi } from '../api'
@@ -136,6 +142,24 @@ const summaryType = computed(() => {
 
 function formatDate(dateStr: string) {
   return formatMonthDay(dateStr)
+}
+
+function calendarDayClass(day: { success: number; failed: number; risk?: number; total: number }) {
+  const risk = day.risk || 0
+  if (day.total === 0) return 'day-empty'
+  if (day.success > 0 && day.failed === 0 && risk === 0) return 'day-success'
+  if (day.success > 0 && (day.failed > 0 || risk > 0)) return 'day-partial'
+  if (day.failed > 0) return 'day-failed'
+  if (risk > 0) return 'day-risk'
+  return 'day-failed'
+}
+
+function buildCheckinToast(data: { success: number; failed: number; risk?: number }) {
+  const parts = [`成功 ${data.success}`, `失败 ${data.failed}`]
+  if (data.risk) {
+    parts.push(`风控 ${data.risk}`)
+  }
+  return `签到完成：${parts.join('，')}`
 }
 
 async function loadDashboardSummary() {
@@ -161,7 +185,7 @@ async function handleExecute() {
     const { data } = await taskApi.execute()
     summary.value = data
     checkinResults.value = data.results || []
-    ElMessage.success(`签到完成：成功 ${data.success}，失败 ${data.failed}`)
+    ElMessage.success(buildCheckinToast(data))
     await loadData()
   } catch (e) {
     // 错误已在拦截器中统一处理。
@@ -180,7 +204,7 @@ onMounted(loadData)
 
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-4);
 }
 
@@ -319,6 +343,12 @@ onMounted(loadData)
   color: var(--text-danger);
   background: var(--bg-danger-soft);
   border-color: var(--border-danger-soft);
+}
+
+.day-risk {
+  color: var(--text-warning);
+  background: var(--bg-warning-soft);
+  border-color: var(--border-warning-soft);
 }
 
 .day-empty {

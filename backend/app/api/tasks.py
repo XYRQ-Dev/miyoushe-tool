@@ -126,6 +126,7 @@ async def get_today_status(
             "total_accounts": 0,
             "signed_today": 0,
             "failed_today": 0,
+            "risk_today": 0,
             "pending": 0,
         }
 
