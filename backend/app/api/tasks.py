@@ -52,11 +52,14 @@ async def get_task_config(
     db: AsyncSession = Depends(get_db),
 ):
     """获取配置，并尝试自愈本进程缺失的启用任务；失败通过 scheduler_error 返回"""
-    config, _ = await get_or_create_task_config(db, current_user.id, auto_commit=True)
-    runtime = await scheduler_service.ensure_user_schedule(
-        config, user_active=current_user.is_active,
-    )
-    return _build_task_config_response(config, runtime)
+    async with scheduler_service.user_schedule_lock(current_user.id):
+        config, _ = await get_or_create_task_config(
+            db, current_user.id, auto_commit=True, for_update=True,
+        )
+        runtime = await scheduler_service.ensure_user_schedule(
+            config, user_active=current_user.is_active,
+        )
+        return _build_task_config_response(config, runtime)
 
 
 @router.put("/config", response_model=TaskConfigResponse)
@@ -66,21 +69,38 @@ async def update_task_config(
     db: AsyncSession = Depends(get_db),
 ):
     """更新签到调度配置"""
-    config, _ = await get_or_create_task_config(db, current_user.id, auto_commit=False)
-
-    config.cron_expr = data.cron_expr
-    config.is_enabled = data.is_enabled
-    await db.flush()
-
+    user_id = current_user.id
     try:
-        runtime = await scheduler_service.update_user_schedule(current_user.id, config)
+        scheduler_service.validate_user_schedule(user_id, data)
     except ScheduleRegistrationError as exc:
-        await db.rollback()
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    await db.commit()
-    await db.refresh(config)
-    return _build_task_config_response(config, runtime)
+    async with scheduler_service.user_schedule_lock(user_id):
+        snapshot = scheduler_service.snapshot_user_schedule(user_id)
+        runtime_changed = False
+        try:
+            # 鉴权可能已建立 MySQL 事务快照，锁定读取确保等待后使用最新配置
+            config, _ = await get_or_create_task_config(db, user_id, for_update=True)
+            config.cron_expr = data.cron_expr
+            config.is_enabled = data.is_enabled
+            await db.flush()
+            runtime = await scheduler_service.update_user_schedule(user_id, config)
+            runtime_changed = True
+            # 提交前完成响应构造，避免提交后 refresh 失败被误当成提交失败补偿
+            response = _build_task_config_response(config, runtime)
+            await db.commit()
+        except BaseException as exc:
+            try:
+                await db.rollback()
+            except Exception:
+                logger.exception("用户 %s 调度配置回滚失败，最初异常: %s", user_id, exc)
+            if runtime_changed:
+                scheduler_service.restore_user_schedule(user_id, snapshot, exc)
+            if isinstance(exc, ScheduleRegistrationError):
+                raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+            raise
+        scheduler_service.clear_user_schedule_error(user_id)
+        return response.model_copy(update={"scheduler_error": None})
 
 
 @router.post("/execute", response_model=CheckinSummary)

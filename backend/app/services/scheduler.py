@@ -3,10 +3,12 @@
 使用 APScheduler 实现定时签到和网页登录态巡检
 """
 
+import asyncio
 import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -50,6 +52,56 @@ class SchedulerService:
         # cron 的“每天 6 点”固定为东八区 6 点，不跟随部署机器或浏览器时区。
         self.scheduler = AsyncIOScheduler(timezone=SHANGHAI)
         self._started = False
+        self._schedule_locks: dict[int, asyncio.Lock] = {}
+        self._schedule_errors: dict[int, str] = {}
+
+    def user_schedule_lock(self, user_id: int) -> asyncio.Lock:
+        """串行化本进程同一用户的配置读取、更新及补偿"""
+        return self._schedule_locks.setdefault(user_id, asyncio.Lock())
+
+    def validate_user_schedule(self, user_id: int, config) -> None:
+        """启用配置必须在数据库和运行任务变更前通过 Cron 校验"""
+        if config.is_enabled:
+            self._build_trigger(user_id, config.cron_expr)
+
+    def snapshot_user_schedule(self, user_id: int) -> SimpleNamespace | None:
+        """保存触发器和下次运行时间，不持有会随调度推进而变化的 Job"""
+        job = self.scheduler.get_job(self._build_job_id(user_id))
+        if job is None:
+            return None
+        # 显式复制运行参数，避免 Job 序列化改变绑定方法及其参数
+        return SimpleNamespace(
+            id=job.id, func=job.func, trigger=job.trigger, args=tuple(job.args),
+            kwargs=dict(job.kwargs), name=job.name, executor=job.executor,
+            misfire_grace_time=job.misfire_grace_time, coalesce=job.coalesce,
+            max_instances=job.max_instances, next_run_time=job.next_run_time,
+        )
+
+    def restore_user_schedule(self, user_id: int, snapshot, original_error: BaseException) -> bool:
+        """恢复原运行态，失败保留最初错误并通过状态接口暴露补偿错误"""
+        job_id = self._build_job_id(user_id)
+        try:
+            current = self.scheduler.get_job(job_id)
+            if snapshot is None:
+                if current is not None:
+                    self.scheduler.remove_job(job_id)
+            elif current is None or current.trigger is not snapshot.trigger:
+                self.scheduler.add_job(
+                    snapshot.func, snapshot.trigger, id=job_id, replace_existing=True,
+                    args=snapshot.args, kwargs=snapshot.kwargs, name=snapshot.name,
+                    misfire_grace_time=snapshot.misfire_grace_time,
+                    coalesce=snapshot.coalesce, max_instances=snapshot.max_instances,
+                    executor=snapshot.executor, next_run_time=snapshot.next_run_time,
+                )
+            return True
+        except Exception as exc:
+            self._schedule_errors[user_id] = f"调度更新失败: {original_error}；恢复原任务失败: {exc}"
+            logger.exception("用户 %s 恢复原任务失败，最初异常: %s", user_id, original_error)
+            return False
+
+    def clear_user_schedule_error(self, user_id: int) -> None:
+        """仅在配置与运行任务更新成功后清除补偿错误"""
+        self._schedule_errors.pop(user_id, None)
 
     @property
     def is_started(self) -> bool:
@@ -66,6 +118,7 @@ class SchedulerService:
         scheduler_error: str | None = None,
     ) -> ScheduleRegistrationResult:
         job_id = self._build_job_id(user_id)
+        scheduler_error = scheduler_error or self._schedule_errors.get(user_id)
         if not enabled:
             return ScheduleRegistrationResult(
                 enabled=False,
@@ -152,6 +205,8 @@ class SchedulerService:
 
         try:
             trigger = self._build_trigger(user_id, config.cron_expr)
+            if not self.scheduler.running:
+                raise ScheduleRegistrationError("任务调度器尚未启动", status_code=503)
 
             self.scheduler.add_job(
                 self._execute_checkin,
@@ -186,14 +241,18 @@ class SchedulerService:
 
     async def update_user_schedule(self, user_id: int, config: TaskConfig) -> ScheduleRegistrationResult:
         """更新用户的调度配置"""
+        self.validate_user_schedule(user_id, config)
         job_id = self._build_job_id(user_id)
-
-        # 启用时先校验再按固定 ID 替换，不能提前删除仍有效的旧任务
-        if config.is_enabled:
-            return await self._add_job(user_id, config)
-
-        if self.scheduler.get_job(job_id):
-            self.scheduler.remove_job(job_id)
+        snapshot = self.snapshot_user_schedule(user_id)
+        try:
+            # 启用时按固定 ID 替换，不能提前删除仍有效的旧任务
+            if config.is_enabled:
+                return await self._add_job(user_id, config)
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+        except Exception as exc:
+            self.restore_user_schedule(user_id, snapshot, exc)
+            raise
 
         logger.info(f"用户 {user_id} 的签到任务已禁用")
         return self._build_result(user_id=user_id, enabled=False)
@@ -204,6 +263,9 @@ class SchedulerService:
         """仅为已提交的启用配置补注册缺失任务；失败返回运行态，供调用方重试"""
         enabled = bool(config.is_enabled and user_active)
         try:
+            # 补偿失败时不能把仍存在的新任务误报为旧配置已恢复
+            if config.user_id in self._schedule_errors:
+                return self._build_result(user_id=config.user_id, enabled=enabled)
             if not enabled:
                 return self._build_result(user_id=config.user_id, enabled=False)
             if not self.scheduler.running:

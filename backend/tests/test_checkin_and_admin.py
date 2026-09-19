@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import unittest
@@ -524,6 +525,194 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("Cron 表达式无效", ctx.exception.detail)
+
+    async def _create_schedule_update_fixture(self, session, *, enabled=True, registered=True):
+        user = await self._create_user(session, "safe-schedule")
+        config = TaskConfig(user_id=user.id, cron_expr="0 6 * * *", is_enabled=enabled)
+        session.add(config)
+        await session.commit()
+        service = self.registration_scheduler
+        if registered:
+            await service.update_user_schedule(user.id, config)
+        return user, config, service
+
+    async def test_schedule_api_invalid_cron_preserves_database_and_job(self):
+        async with await self._new_session() as session:
+            user, config, service = await self._create_schedule_update_fixture(session)
+            old = service.snapshot_user_schedule(user.id)
+            with patch("app.api.tasks.scheduler_service", service):
+                with self.assertRaises(HTTPException) as ctx:
+                    await update_task_config(TaskConfigCreate(cron_expr="60 6 * * *"), user, session)
+            self.assertEqual(ctx.exception.status_code, 400)
+            await session.refresh(config)
+            self.assertEqual(config.cron_expr, "0 6 * * *")
+            current = service.scheduler.get_job(old.id)
+            self.assertIs(current.trigger, old.trigger)
+            self.assertEqual(current.next_run_time, old.next_run_time)
+
+    async def test_schedule_api_replaces_then_disables_job(self):
+        async with await self._new_session() as session:
+            user, config, service = await self._create_schedule_update_fixture(session)
+            old = service.snapshot_user_schedule(user.id)
+            with patch("app.api.tasks.scheduler_service", service):
+                replaced = await update_task_config(TaskConfigCreate(cron_expr="15 9 * * *"), user, session)
+                self.assertEqual(replaced.job_id, old.id)
+                self.assertNotEqual(str(service.scheduler.get_job(old.id).trigger), str(old.trigger))
+                disabled = await update_task_config(
+                    TaskConfigCreate(cron_expr="15 9 * * *", is_enabled=False), user, session,
+                )
+            self.assertFalse(disabled.job_registered)
+            self.assertIsNone(service.scheduler.get_job(old.id))
+            await session.refresh(config)
+            self.assertFalse(config.is_enabled)
+
+    async def test_schedule_registration_failure_restores_even_after_replacement(self):
+        async with await self._new_session() as session:
+            user, config, service = await self._create_schedule_update_fixture(session)
+            user_id = user.id
+            old = service.snapshot_user_schedule(user_id)
+            original_add = service.scheduler.add_job
+
+            def replace_then_fail(*args, **kwargs):
+                job = original_add(*args, **kwargs)
+                if job.trigger is not old.trigger:
+                    raise RuntimeError("registration failed after replacement")
+                return job
+
+            with patch("app.api.tasks.scheduler_service", service), patch.object(
+                service.scheduler, "add_job", side_effect=replace_then_fail,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    await update_task_config(TaskConfigCreate(cron_expr="15 9 * * *"), user, session)
+            self.assertEqual(ctx.exception.status_code, 500)
+            current = service.scheduler.get_job(old.id)
+            self.assertIs(current.trigger, old.trigger)
+            self.assertEqual(current.next_run_time, old.next_run_time)
+            await session.refresh(config)
+            self.assertEqual(config.cron_expr, "0 6 * * *")
+
+    async def test_schedule_commit_failure_restores_existing_missing_and_disabled_states(self):
+        for enabled, registered, new_enabled in [(True, True, True), (True, True, False),
+                                                   (True, False, True), (False, False, True)]:
+            with self.subTest(enabled=enabled, registered=registered, new_enabled=new_enabled):
+                async with await self._new_session() as session:
+                    user = await self._create_user(session, f"commit-{enabled}-{registered}-{new_enabled}")
+                    user_id = user.id
+                    config = TaskConfig(user_id=user_id, cron_expr="0 6 * * *", is_enabled=enabled)
+                    session.add(config)
+                    await session.commit()
+                    service = self.registration_scheduler
+                    if registered:
+                        await service.update_user_schedule(user_id, config)
+                    old = service.snapshot_user_schedule(user_id)
+                    with patch("app.api.tasks.scheduler_service", service), patch.object(
+                        session, "commit", new=AsyncMock(side_effect=RuntimeError("commit failed")),
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                            await update_task_config(
+                                TaskConfigCreate(cron_expr="15 9 * * *", is_enabled=new_enabled), user, session,
+                            )
+                    current = service.scheduler.get_job(f"checkin_user_{user_id}")
+                    if old is None:
+                        self.assertIsNone(current)
+                    else:
+                        self.assertIs(current.trigger, old.trigger)
+                        self.assertEqual(current.next_run_time, old.next_run_time)
+                    await session.refresh(config)
+                    self.assertEqual(config.cron_expr, "0 6 * * *")
+                    self.assertEqual(config.is_enabled, enabled)
+
+    async def test_schedule_compensation_failure_is_visible_until_successful_update(self):
+        async with await self._new_session() as session:
+            user, config, service = await self._create_schedule_update_fixture(session)
+            user_id = user.id
+            old = service.snapshot_user_schedule(user_id)
+            original_add = service.scheduler.add_job
+
+            def fail_restore(func, trigger, **kwargs):
+                if trigger is old.trigger:
+                    raise RuntimeError("restore failed")
+                return original_add(func, trigger, **kwargs)
+
+            with patch("app.api.tasks.scheduler_service", service), patch.object(
+                service.scheduler, "add_job", side_effect=fail_restore,
+            ), patch.object(session, "commit", new=AsyncMock(side_effect=RuntimeError("commit failed"))):
+                with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                    await update_task_config(TaskConfigCreate(cron_expr="15 9 * * *"), user, session)
+            await session.refresh(user)
+            with patch("app.api.tasks.scheduler_service", service):
+                status = await get_task_config(user, session)
+                self.assertEqual(status.cron_expr, "0 6 * * *")
+                self.assertIn("commit failed", status.scheduler_error)
+                self.assertIn("restore failed", status.scheduler_error)
+                recovered = await update_task_config(TaskConfigCreate(cron_expr="30 10 * * *"), user, session)
+                self.assertIsNone(recovered.scheduler_error)
+                self.assertIsNone(service.get_user_schedule_status(user_id, enabled=True).scheduler_error)
+
+    async def test_schedule_new_config_commit_failure_leaves_no_config_or_job(self):
+        async with await self._new_session() as session:
+            user = await self._create_user(session, "missing-safe-schedule")
+            await session.commit()
+            user_id = user.id
+            service = self.registration_scheduler
+            with patch("app.api.tasks.scheduler_service", service), patch.object(
+                session, "commit", new=AsyncMock(side_effect=RuntimeError("commit failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                    await update_task_config(TaskConfigCreate(cron_expr="15 9 * * *"), user, session)
+            self.assertIsNone(service.scheduler.get_job(f"checkin_user_{user_id}"))
+        async with await self._new_session() as verify:
+            self.assertIsNone((await verify.execute(
+                select(TaskConfig).where(TaskConfig.user_id == user_id),
+            )).scalar_one_or_none())
+
+    async def test_schedule_concurrent_update_waits_for_failed_request_compensation(self):
+        async with await self._new_session() as setup:
+            user, _, service = await self._create_schedule_update_fixture(setup)
+            user_id = user.id
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def fail_commit():
+            entered.set()
+            await release.wait()
+            raise RuntimeError("first commit failed")
+
+        async with await self._new_session() as first, await self._new_session() as second:
+            first_user = await first.get(User, user_id)
+            second_user = await second.get(User, user_id)
+            with patch("app.api.tasks.scheduler_service", service), patch.object(
+                first, "commit", new=AsyncMock(side_effect=fail_commit),
+            ):
+                first_task = asyncio.create_task(update_task_config(
+                    TaskConfigCreate(cron_expr="15 9 * * *"), first_user, first,
+                ))
+                second_task = None
+                try:
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    second_task = asyncio.create_task(update_task_config(
+                        TaskConfigCreate(cron_expr="30 10 * * *"), second_user, second,
+                    ))
+                    await asyncio.sleep(0)
+                    self.assertFalse(second_task.done())
+                    release.set()
+                    results = await asyncio.wait_for(asyncio.gather(
+                        first_task, second_task, return_exceptions=True,
+                    ), timeout=5)
+                    self.assertIsInstance(results[0], RuntimeError)
+                    self.assertEqual(results[1].cron_expr, "30 10 * * *")
+                finally:
+                    release.set()
+                    pending = [task for task in (first_task, second_task) if task is not None]
+                    for task in pending:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+        async with await self._new_session() as verify:
+            stored = (await verify.execute(select(TaskConfig).where(TaskConfig.user_id == user_id))).scalar_one()
+            self.assertEqual(stored.cron_expr, "30 10 * * *")
+        job = service.scheduler.get_job(f"checkin_user_{user_id}")
+        self.assertEqual(str(job.trigger), str(service._build_trigger(user_id, "30 10 * * *")))
 
     async def test_build_checkin_headers_include_starward_required_fields(self):
         async with await self._new_session() as session:

@@ -23,9 +23,13 @@ async def get_or_create_task_config(
     user_id: int,
     *,
     auto_commit: bool = False,
+    for_update: bool = False,
 ) -> tuple[TaskConfig, bool]:
-    """获取或补建默认配置；调用方须在提交后通过调度服务恢复运行任务"""
-    result = await db.execute(select(TaskConfig).where(TaskConfig.user_id == user_id))
+    """获取或补建默认配置；for_update 用当前读避开旧快照，调用方提交后再恢复任务"""
+    statement = select(TaskConfig).where(TaskConfig.user_id == user_id)
+    if for_update:
+        statement = statement.with_for_update().execution_options(populate_existing=True)
+    result = await db.execute(statement)
     config = result.scalar_one_or_none()
     if config is not None:
         return config, False
