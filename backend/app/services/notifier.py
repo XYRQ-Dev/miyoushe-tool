@@ -31,6 +31,7 @@ from app.models.user import User
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_text
 from app.schemas.task_log import CheckinSummary
+from app.services.checkin_rewards import format_reward_text
 from app.utils.timezone import get_shanghai_date, utc_now
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,10 @@ EMAIL_TEMPLATE = Template("""
                 <tr>
                     <td class="meta-label">签到天数</td>
                     <td class="meta-value">{{ r.total_sign_days or '-' }}</td>
+                </tr>
+                <tr>
+                    <td class="meta-label">奖励</td>
+                    <td class="meta-value">{{ format_reward(r.reward_name, r.reward_cnt) or '-' }}</td>
                 </tr>
             </table>
         </div>
@@ -288,6 +293,9 @@ class NotificationService:
                 "status": result.status,
                 "message": result.message or "",
                 "total_sign_days": result.total_sign_days,
+                "reward_name": result.reward_name or "",
+                "reward_cnt": result.reward_cnt,
+                "reward_icon": result.reward_icon or "",
             })
 
         payload = {
@@ -490,6 +498,7 @@ class NotificationService:
             game_names=GAME_NAME_MAP,
             status_names=STATUS_NAME_MAP,
             ordered_results=sorted(summary.results, key=self._result_sort_key),
+            format_reward=format_reward_text,
         )
 
         await self._send_html_email(

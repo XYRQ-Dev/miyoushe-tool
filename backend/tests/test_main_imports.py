@@ -92,6 +92,32 @@ class MainModuleImportTests(unittest.TestCase):
             ],
         )
 
+    def test_get_task_log_reward_column_ddls_only_returns_missing_columns(self):
+        from app.database import get_task_log_reward_column_ddls
+
+        statements = get_task_log_reward_column_ddls(
+            {
+                "id",
+                "account_id",
+                "game_role_id",
+                "task_type",
+                "status",
+                "message",
+                "total_sign_days",
+                "executed_at",
+            }
+        )
+
+        self.assertEqual(
+            statements,
+            [
+                "ALTER TABLE task_logs ADD COLUMN reward_name VARCHAR(64) NULL",
+                "ALTER TABLE task_logs ADD COLUMN reward_cnt INTEGER NULL",
+                "ALTER TABLE task_logs ADD COLUMN reward_icon VARCHAR(512) NULL",
+            ],
+        )
+        self.assertEqual(get_task_log_reward_column_ddls({"reward_name", "reward_cnt", "reward_icon"}), [])
+
     def test_get_test_database_url_requires_mysql_asyncmy_url(self):
         mysql_test_case = import_module("tests.mysql_test_case")
 

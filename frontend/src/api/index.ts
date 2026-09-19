@@ -83,6 +83,8 @@ export const taskApi = {
 export const logApi = {
   list: (params: any) => api.get('/logs', { params }),
   getCalendar: (days: number = 7) => api.get('/logs/calendar', { params: { days } }),
+  getRewards: (params?: { game?: string; game_role_id?: number | null }) =>
+    api.get('/logs/rewards', { params }),
 }
 
 // ===== 管理员 API =====

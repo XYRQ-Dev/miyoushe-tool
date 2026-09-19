@@ -28,3 +28,21 @@ export const CHECKIN_GAME_FILTER_OPTIONS = [
   { label: '崩坏3', value: 'bh3' },
   { label: '绝区零', value: 'nap' },
 ] as const
+
+export const GAME_FAMILY_BY_BIZ: Record<string, string> = {
+  hk4e_cn: 'hk4e',
+  hk4e_bilibili: 'hk4e',
+  hkrpg_cn: 'hkrpg',
+  hkrpg_bilibili: 'hkrpg',
+  bh3_cn: 'bh3',
+  nap_cn: 'nap',
+}
+
+export function getGameFamily(gameBiz?: string | null) {
+  if (!gameBiz) return ''
+  return GAME_FAMILY_BY_BIZ[gameBiz] || ''
+}
+
+export const CHECKIN_GAME_FILTER_LABELS: Record<string, string> = Object.fromEntries(
+  CHECKIN_GAME_FILTER_OPTIONS.map((option) => [option.value, option.label]),
+)

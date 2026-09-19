@@ -64,16 +64,20 @@ class FakeResponse:
 
 
 class FakeClient:
-    def __init__(self, *, get_payload=None, post_payload=None):
+    def __init__(self, *, get_payload=None, post_payload=None, get_payloads_by_url=None):
         self.get_payload = get_payload
         self.post_payload = post_payload
+        self.get_payloads_by_url = get_payloads_by_url or {}
         self.last_get = None
         self.last_post = None
+        self.get_calls = []
         self.post_calls = []
 
     async def get(self, url, **kwargs):
         self.last_get = {"url": url, **kwargs}
-        return FakeResponse(self.get_payload)
+        self.get_calls.append(self.last_get)
+        payload = self.get_payloads_by_url.get(url, self.get_payload)
+        return FakeResponse(payload)
 
     async def post(self, url, **kwargs):
         self.last_post = {"url": url, **kwargs}
@@ -587,6 +591,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = CheckinService(session)
             service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
             service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 12})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
             service._do_sign = AsyncMock(
                 return_value=CheckinResult(
                     account_id=account.id,
@@ -630,6 +635,9 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
                     status="success",
                     message="签到成功",
                     total_sign_days=12,
+                    reward_name="原石",
+                    reward_cnt=20,
+                    reward_icon="https://example.com/primogem.png",
                     executed_at=datetime(2026, 3, 16, 16, 30, 0),
                 )
             )
@@ -653,6 +661,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         self.assertEqual(summary.results[0].status, "already_signed")
         self.assertEqual(summary.results[0].message, "今日已签到（复用当日记录，未重复调用接口）")
         self.assertEqual(summary.results[0].total_sign_days, 12)
+        self.assertEqual(summary.results[0].reward_name, "原石")
+        self.assertEqual(summary.results[0].reward_cnt, 20)
         self.assertEqual(len(log_count), 1)
         service._ensure_device_state.assert_not_awaited()
         service._get_sign_info.assert_not_awaited()
@@ -720,6 +730,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = CheckinService(session)
             service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
             service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 13})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
             service._do_sign = AsyncMock(
                 return_value=CheckinResult(
                     account_id=account.id,
@@ -778,6 +789,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = CheckinService(session)
             service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
             service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 11})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
             service._do_sign = AsyncMock(
                 return_value=CheckinResult(
                     account_id=account.id,
@@ -886,6 +898,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = CheckinService(session)
             service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
             service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 8})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
             service._do_sign = AsyncMock(
                 return_value=CheckinResult(
                     account_id=account.id,
@@ -923,6 +936,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = CheckinService(session)
             service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
             service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 8})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
             service._do_sign = AsyncMock(
                 return_value=CheckinResult(
                     account_id=account.id,
@@ -954,6 +968,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = CheckinService(session)
             service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
             service._get_sign_info = AsyncMock(return_value={"is_sign": False, "total_sign_day": 5})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
             service._do_sign = AsyncMock(
                 return_value=CheckinResult(
                     account_id=account.id,
@@ -2006,6 +2021,8 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
                         status="success",
                         message="签到成功",
                         total_sign_days=123,
+                        reward_name="原石",
+                        reward_cnt=20,
                     )
                 ],
             )
@@ -2028,6 +2045,7 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         self.assertIn("原神", html_part)
         self.assertIn("胡桃", html_part)
         self.assertIn("123", html_part)
+        self.assertIn("原石 ×20", html_part)
 
     async def test_send_email_places_summary_before_details(self):
         async with await self._new_session() as session:

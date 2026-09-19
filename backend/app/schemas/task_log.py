@@ -34,6 +34,9 @@ class TaskLogResponse(BaseModel):
     status: str
     message: Optional[str] = None
     total_sign_days: Optional[int] = None
+    reward_name: Optional[str] = None
+    reward_cnt: Optional[int] = None
+    reward_icon: Optional[str] = None
     executed_at: ShanghaiDateTime
     # 额外展示字段（从关联查询填充）
     account_nickname: Optional[str] = None
@@ -60,6 +63,9 @@ class CheckinResult(BaseModel):
     status: str  # success / failed / already_signed / risk
     message: str
     total_sign_days: Optional[int] = None
+    reward_name: Optional[str] = None
+    reward_cnt: Optional[int] = None
+    reward_icon: Optional[str] = None
 
 
 class CheckinSummary(BaseModel):
@@ -70,3 +76,41 @@ class CheckinSummary(BaseModel):
     already_signed: int
     risk: int
     results: List[CheckinResult]
+
+
+class RewardItem(BaseModel):
+    day: int
+    name: str = ""
+    cnt: int = 0
+    icon: Optional[str] = None
+    status: str
+
+
+class RewardRoleOption(BaseModel):
+    game_role_id: int
+    account_nickname: Optional[str] = None
+    game_nickname: Optional[str] = None
+
+
+class RewardGameOption(BaseModel):
+    game: str
+    catalog_available: bool = False
+    role_count: int = 0
+
+
+class RewardCalendarResponse(BaseModel):
+    month: str
+    today: str
+    game: Optional[str] = None
+    game_role_id: Optional[int] = None
+    account_nickname: Optional[str] = None
+    game_nickname: Optional[str] = None
+    total_sign_days: Optional[int] = None
+    today_reward: Optional[RewardItem] = None
+    today_claimed: bool = False
+    awards: List[RewardItem] = []
+    catalog_available: bool = False
+    first_weekday: int = 0
+    roles: List[RewardRoleOption] = []
+    games: List[RewardGameOption] = []
+    empty_reason: Optional[str] = None

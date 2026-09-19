@@ -34,5 +34,8 @@ class TaskLog(Base):
     status = Column(String(20), nullable=False)
     message = Column(Text, nullable=True)
     total_sign_days = Column(Integer, nullable=True)
+    reward_name = Column(String(64), nullable=True)
+    reward_cnt = Column(Integer, nullable=True)
+    reward_icon = Column(String(512), nullable=True)
     # 库内保存 UTC 绝对时刻；接口层再统一转成东八区返回前端。
     executed_at = Column(DateTime, default=utc_now_naive)

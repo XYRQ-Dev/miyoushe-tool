@@ -116,6 +116,41 @@ async def ensure_mihoyo_account_storage_ready() -> None:
             await conn.exec_driver_sql(ddl)
 
 
+def get_task_log_reward_column_ddls(existing_columns: set[str]) -> list[str]:
+    """返回旧版 `task_logs` 需要补齐的奖励列。
+
+    `create_all()` 不会给已存在表加列。奖励名 / 数量 / 图标是展示字段，
+    缺列时 ORM 选列会直接 500，所以必须在冷启动期按白名单补。
+    """
+    ddl_by_column = {
+        "reward_name": "ADD COLUMN reward_name VARCHAR(64) NULL",
+        "reward_cnt": "ADD COLUMN reward_cnt INTEGER NULL",
+        "reward_icon": "ADD COLUMN reward_icon VARCHAR(512) NULL",
+    }
+    return [
+        f"ALTER TABLE task_logs {ddl}"
+        for column_name, ddl in ddl_by_column.items()
+        if column_name not in existing_columns
+    ]
+
+
+async def ensure_task_log_reward_columns() -> None:
+    """为历史 MySQL 库补齐 `task_logs` 奖励列。"""
+    async with engine.begin() as conn:
+        def _load_existing_columns(sync_conn):
+            inspector = inspect(sync_conn)
+            if not inspector.has_table("task_logs"):
+                return None
+            return {column["name"] for column in inspector.get_columns("task_logs")}
+
+        existing_columns = await conn.run_sync(_load_existing_columns)
+        if existing_columns is None:
+            return
+
+        for ddl in get_task_log_reward_column_ddls(existing_columns):
+            await conn.exec_driver_sql(ddl)
+
+
 async def get_db():
     """FastAPI 依赖注入：获取数据库会话"""
     async with async_session() as session:
@@ -130,9 +165,12 @@ async def init_db():
     初始化数据库，创建所有表。
 
     运行时已经冻结为 MySQL-only，但历史本地库仍可能残留“表存在、列不全”的状态。
-    因此这里除了 `create_all()` 以外，还要在冷启动期补齐 `mihoyo_accounts` 的已知缺列；
+    因此这里除了 `create_all()` 以外，还要在冷启动期补齐 `mihoyo_accounts` 和 `task_logs` 的已知缺列；
     否则请求一旦进入 ORM 查询就会直接 500，用户看到的是业务接口异常，根因却是部署结构漂移。
     """
+    import app.models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await ensure_mihoyo_account_storage_ready()
+    await ensure_task_log_reward_columns()

@@ -22,11 +22,22 @@ from typing import Any
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import MihoyoAccount, GameRole
+from app.models.checkin_reward_catalog import CheckinRewardCatalog
 from app.models.task_log import TaskLog
 from app.schemas.task_log import CheckinResult, CheckinSummary
+from app.services.checkin_rewards import (
+    ParsedAward,
+    awards_from_jsonable,
+    awards_to_jsonable,
+    game_family_of,
+    parse_home_awards,
+    pick_award,
+    resolve_claimed_reward_index,
+)
 from app.services.geetest import parse_checkin_risk
 from app.services.login_state import LoginStateService
 from app.services.system_settings import SystemSettingsService
@@ -124,6 +135,8 @@ class CheckinService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.settings_service = SystemSettingsService(db)
+        # 同一轮批量签到内，同一活动号只打一次 home
+        self._reward_catalogs: dict[tuple[str, str], list[ParsedAward]] = {}
 
     def _build_result_context(self, account: MihoyoAccount, role: GameRole | None = None) -> dict[str, Any]:
         """
@@ -186,6 +199,9 @@ class CheckinService:
             status="already_signed",
             message="今日已签到（复用当日记录，未重复调用接口）",
             total_sign_days=latest_log.total_sign_days,
+            reward_name=latest_log.reward_name,
+            reward_cnt=latest_log.reward_cnt,
+            reward_icon=latest_log.reward_icon,
             **self._build_result_context(account, role),
         )
 
@@ -294,6 +310,9 @@ class CheckinService:
                             status=result.status,
                             message=result.message,
                             total_sign_days=result.total_sign_days,
+                            reward_name=result.reward_name,
+                            reward_cnt=result.reward_cnt,
+                            reward_icon=result.reward_icon,
                         )
                     )
 
@@ -337,20 +356,39 @@ class CheckinService:
         try:
             called_api = True
             info = await self._get_sign_info(client, cookie, config, role, device_state)
+            awards = await self._ensure_monthly_rewards(client, cookie, config, role, device_state)
+            query_total = info.get("total_sign_day")
+            if query_total is not None:
+                try:
+                    query_total = int(query_total)
+                except (TypeError, ValueError):
+                    query_total = None
 
             if info.get("is_sign"):
-                return CheckinResult(
+                result = CheckinResult(
                     account_id=account.id,
                     game_role_id=role.id,
                     status="already_signed",
                     message="今日已签到",
-                    total_sign_days=info.get("total_sign_day"),
+                    total_sign_days=query_total,
                     **self._build_result_context(account, role),
+                )
+                return self._with_reward(
+                    result,
+                    awards,
+                    signed_from_info=True,
+                    query_total=query_total,
                 )
 
             # 查询成功且确认“未签到”后再等待短延迟，避免把无意义等待扩散到失败分支。
             await self._sleep_between_info_and_sign()
-            return await self._do_sign(client, cookie, config, account, role, device_state)
+            result = await self._do_sign(client, cookie, config, account, role, device_state)
+            return self._with_reward(
+                result,
+                awards,
+                signed_from_info=False,
+                query_total=query_total,
+            )
 
         except CheckinApiError as exc:
             logger.warning("角色 %s 签到阶段失败: %s", role.game_uid, exc)
@@ -399,6 +437,139 @@ class CheckinService:
         data = response.json()
         self._raise_for_api_error("查询签到状态", role.game_biz, data)
         return data.get("data", {})
+
+    def _with_reward(
+        self,
+        result: CheckinResult,
+        awards: list[ParsedAward],
+        *,
+        signed_from_info: bool,
+        query_total: int | None,
+    ) -> CheckinResult:
+        if result.status not in ("success", "already_signed"):
+            return result
+        index = resolve_claimed_reward_index(
+            signed_from_info=signed_from_info,
+            result_total=result.total_sign_days,
+            query_total=query_total,
+        )
+        award = pick_award(awards, index)
+        if award is None or not award.name:
+            return result
+        return result.model_copy(
+            update={
+                "reward_name": award.name,
+                "reward_cnt": award.cnt,
+                "reward_icon": award.icon,
+            }
+        )
+
+    async def _ensure_monthly_rewards(
+        self,
+        client: httpx.AsyncClient,
+        cookie: str,
+        config: CheckinGameConfig,
+        role: GameRole,
+        device_state: tuple[str, str],
+    ) -> list[ParsedAward]:
+        month = get_shanghai_date().strftime("%Y-%m")
+        cache_key = (config.act_id, month)
+        cached = self._reward_catalogs.get(cache_key)
+        if cached is not None:
+            return cached
+
+        existing = await self.db.execute(
+            select(CheckinRewardCatalog).where(
+                CheckinRewardCatalog.act_id == config.act_id,
+                CheckinRewardCatalog.month == month,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            try:
+                raw = json.loads(row.awards_json) if row.awards_json else []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("当月奖励目录 JSON 损坏: act_id=%s, month=%s", config.act_id, month)
+                raw = []
+            awards = awards_from_jsonable(raw)
+            self._reward_catalogs[cache_key] = awards
+            return awards
+
+        try:
+            awards = await self._fetch_monthly_rewards(client, cookie, config, role, device_state)
+        except Exception as exc:
+            logger.warning(
+                "拉取当月奖励目录失败: act_id=%s, game_biz=%s, err=%s",
+                config.act_id,
+                role.game_biz,
+                exc,
+            )
+            self._reward_catalogs[cache_key] = []
+            return []
+
+        if awards is None:
+            self._reward_catalogs[cache_key] = []
+            return []
+
+        catalog = CheckinRewardCatalog(
+            act_id=config.act_id,
+            game_family=game_family_of(role.game_biz) or role.game_biz,
+            month=month,
+            awards_json=json.dumps(awards_to_jsonable(awards), ensure_ascii=False),
+            fetched_at=utc_now_naive(),
+        )
+        try:
+            async with self.db.begin_nested():
+                self.db.add(catalog)
+                await self.db.flush()
+        except IntegrityError:
+            existing = await self.db.execute(
+                select(CheckinRewardCatalog).where(
+                    CheckinRewardCatalog.act_id == config.act_id,
+                    CheckinRewardCatalog.month == month,
+                )
+            )
+            row = existing.scalar_one_or_none()
+            if row is not None:
+                try:
+                    awards = awards_from_jsonable(json.loads(row.awards_json) if row.awards_json else [])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    awards = awards
+
+        self._reward_catalogs[cache_key] = awards
+        return awards
+
+    async def _fetch_monthly_rewards(
+        self,
+        client: httpx.AsyncClient,
+        cookie: str,
+        config: CheckinGameConfig,
+        role: GameRole,
+        device_state: tuple[str, str],
+    ) -> list[ParsedAward] | None:
+        device_id, device_fp = device_state
+        headers = self._build_checkin_headers(
+            cookie,
+            device_id=device_id,
+            device_fp=device_fp,
+            config=config,
+        )
+        response = await client.get(
+            config.rewards_url,
+            params={"act_id": config.act_id, "region": role.region, "uid": role.game_uid},
+            headers=headers,
+        )
+        payload = response.json()
+        awards = parse_home_awards(payload)
+        if awards is None:
+            logger.warning(
+                "当月奖励目录上游未成功: act_id=%s, game_biz=%s, retcode=%s, message=%s",
+                config.act_id,
+                role.game_biz,
+                payload.get("retcode"),
+                payload.get("message"),
+            )
+        return awards
 
     async def _do_sign(
         self,

@@ -70,6 +70,9 @@
                 角色：{{ row.game_nickname }}
               </div>
               <div class="message-text">{{ row.message || '-' }}</div>
+              <div v-if="formatReward(row.reward_name, row.reward_cnt)" class="message-meta">
+                {{ formatReward(row.reward_name, row.reward_cnt) }}
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -103,6 +106,7 @@ import { logApi } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
 import { CHECKIN_GAME_FILTER_OPTIONS, getGameName } from '../constants/game'
 import { formatDateTime } from '../utils/datetime'
+import { formatReward } from '../utils/reward'
 
 const logs = ref<any[]>([])
 const loading = ref(false)
