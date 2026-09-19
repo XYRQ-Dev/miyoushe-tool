@@ -40,6 +40,10 @@ class RootCredentialNetworkError(RuntimeError):
     """与官方接口通信失败时抛出的网络异常。"""
 
 
+class AccountUidMismatchError(ValueError):
+    """重登不能用另一个米游社身份覆盖已有账号"""
+
+
 @dataclass(frozen=True)
 class RootCredentialSnapshot:
     """
@@ -242,6 +246,10 @@ class AccountCredentialService:
         这里统一收口“登录成功后账号该怎么写库”的入口，避免 WebSocket、短信登录、
         后续票据换取各自直接改模型字段。只要入口一分叉，字段含义和默认状态迟早会不一致。
         """
+        incoming_uid = str(login_result["stuid"])
+        if any(str(uid) != incoming_uid for uid in (account.mihoyo_uid, account.stuid) if uid):
+            raise AccountUidMismatchError("扫码米游社 UID 与原账号不一致，请使用原账号扫码，或通过“添加账号”绑定新账号")
+
         account.stoken_encrypted = encrypt_text(login_result["stoken"])
         account.login_ticket_encrypted = (
             encrypt_text(login_result["login_ticket"])

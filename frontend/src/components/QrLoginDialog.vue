@@ -25,11 +25,15 @@
           </div>
 
           <div v-else-if="status === 'success'" class="qr-success">
-            <el-icon :size="48" color="var(--color-success)"><CircleCheck /></el-icon>
-            <p>登录成功</p>
+            <el-icon :size="48" :color="rolesSyncPending ? 'var(--color-warning)' : 'var(--color-success)'">
+              <WarningFilled v-if="rolesSyncPending" />
+              <CircleCheck v-else />
+            </el-icon>
+            <p>{{ rolesSyncPending ? '账号已绑定，角色同步待重试' : '登录成功' }}</p>
             <p class="sub-text">
-              {{ rolesCount > 0 ? `已同步 ${rolesCount} 个游戏角色` : '正在刷新账号列表' }}
+              {{ successMessage }}
             </p>
+            <el-button v-if="rolesSyncPending" type="primary" @click="finishQrLogin">返回账号页重试</el-button>
           </div>
 
           <div v-else-if="status === 'failed' || status === 'timeout'" class="qr-error">
@@ -45,7 +49,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="短信登录" name="sms">
+      <el-tab-pane label="短信登录" name="sms" :disabled="status === 'success'">
         <div class="sms-container">
           <el-alert
             type="warning"
@@ -117,8 +121,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, CircleCheck, CircleClose } from '@element-plus/icons-vue'
-import { accountApi } from '../api'
+import { Loading, CircleCheck, CircleClose, WarningFilled } from '@element-plus/icons-vue'
+import { accountApi, type QrLoginSuccessResponse } from '../api'
 
 type QrStatus = 'initializing' | 'qr_ready' | 'scanned' | 'success' | 'failed' | 'timeout'
 type LoginTab = 'qr' | 'sms'
@@ -140,7 +144,9 @@ const activeTab = ref<LoginTab>('qr')
 const status = ref<QrStatus>('initializing')
 const qrImage = ref('')
 const errorMessage = ref('')
-const rolesCount = ref(0)
+const successResult = ref<QrLoginSuccessResponse | null>(null)
+const rolesSyncPending = computed(() => successResult.value?.roles_sync_status !== 'success')
+const successMessage = computed(() => successResult.value?.message || '账号已绑定，请在账号页确认角色同步结果')
 const smsForm = ref({
   mobile: '',
   captcha: '',
@@ -161,6 +167,7 @@ const canVerifySms = computed(() => Boolean(
 let ws: WebSocket | null = null
 let qrAttempt = 0
 let successTimer: number | null = null
+let successDelivered = false
 
 function getDisplayErrorMessage(message: string) {
   if (message.includes('未进入扫码登录界面')) {
@@ -200,7 +207,8 @@ function resetQrState() {
   status.value = 'initializing'
   qrImage.value = ''
   errorMessage.value = ''
-  rolesCount.value = 0
+  successResult.value = null
+  successDelivered = false
 }
 
 function resetSmsState() {
@@ -238,7 +246,13 @@ function applyQrProgressStatus(nextStatus: string) {
 }
 
 function handleDialogClose() {
+  if (successResult.value && !successDelivered) finishQrLogin()
   resetDialogState()
+}
+
+function finishQrLogin() {
+  successDelivered = true
+  emit('success', successResult.value)
 }
 
 async function startQrLogin() {
@@ -280,9 +294,11 @@ async function startQrLogin() {
           break
         case 'success':
           status.value = 'success'
-          rolesCount.value = data.roles_count || 0
+          successResult.value = data as QrLoginSuccessResponse
           clearSuccessTimer()
-          successTimer = window.setTimeout(() => emit('success'), 1500)
+          if (!rolesSyncPending.value) {
+            successTimer = window.setTimeout(finishQrLogin, 1500)
+          }
           break
         case 'error':
           status.value = 'failed'
@@ -379,6 +395,7 @@ watch(() => props.visible, (visible) => {
     startQrLogin()
     return
   }
+  if (successResult.value && !successDelivered) finishQrLogin()
   resetDialogState()
 })
 

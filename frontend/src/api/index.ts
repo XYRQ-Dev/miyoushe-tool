@@ -61,6 +61,27 @@ export type QrLoginStartResponse = {
   message: string
 }
 
+export type RoleSyncResult = {
+  roles_sync_status: 'success' | 'pending'
+  roles_count: number | null
+}
+
+export type QrLoginSuccessResponse = RoleSyncResult & {
+  type: 'success'
+  account_id: number
+  message: string
+}
+
+export type LoginStateResponse = {
+  roles_sync_status: 'success' | 'pending' | null
+  roles_count: number | null
+  account_id: number
+  cookie_status: string
+  message: string
+  last_refresh_status: string | null
+  last_refresh_message: string | null
+}
+
 export const accountApi = {
   list: () => api.get('/accounts'),
   startQrLogin: () => api.post<QrLoginStartResponse>('/accounts/qr-login'),
@@ -74,7 +95,7 @@ export const accountApi = {
   }) => api.post('/accounts/sms-login/verify', data),
   delete: (id: number) => api.delete(`/accounts/${id}`),
   refreshCookie: (id: number) => api.post<QrLoginStartResponse>(`/accounts/${id}/refresh-cookie`),
-  checkLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
+  checkLoginState: (id: number) => api.post<LoginStateResponse>(`/accounts/${id}/refresh-login-state`, undefined, { timeout: 90000 }),
 }
 
 // ===== 任务 API =====

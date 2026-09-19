@@ -15,6 +15,8 @@ from app import main
 from app.api import accounts
 from app.models.account import MihoyoAccount
 from app.services.passport_login import PassportQrLoginManager
+from app.services.account_role_sync import RoleFetchError
+from app.utils.crypto import encrypt_cookie
 
 
 def fake_db(rows):
@@ -51,7 +53,7 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         session.login_result = {"stoken": "test-secret", "stuid": "11", "mid": "test-mid"}
         return grant, session
 
-    async def connect(self, grant, rows, frame=None, receive_error=None):
+    async def connect(self, grant, rows, frame=None, receive_error=None, *, role_error=None, cookie_state="valid"):
         socket = MagicMock()
         socket.accept = AsyncMock()
         socket.receive_json = AsyncMock(
@@ -70,11 +72,25 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             context.__aenter__ = AsyncMock(return_value=db)
             context.__aexit__ = AsyncMock(return_value=False)
             contexts.append(context)
-        persist = AsyncMock()
+        original_persist = main.AccountCredentialService.persist_login_result
+
+        async def persist_result(account, login_result):
+            return await original_persist(main.AccountCredentialService(dbs[-1]), account, login_result)
+
+        async def ensure_cookie(account):
+            if cookie_state == "valid":
+                account.cookie_status = "valid"
+                account.cookie_encrypted = encrypt_cookie("test-cookie")
+            return {"state": cookie_state, "message": "工作 Cookie 补齐结果"}
+
+        persist = AsyncMock(side_effect=persist_result)
         with (
             patch.object(main, "async_session", side_effect=contexts),
             patch.object(main.asyncio, "sleep", new=AsyncMock()),
             patch.object(main.AccountCredentialService, "persist_login_result", persist),
+            patch.object(main.AccountCredentialService, "ensure_work_cookie", new=AsyncMock(side_effect=ensure_cookie)),
+            patch("app.services.account_role_sync.fetch_game_roles", new=AsyncMock(return_value=[{}], side_effect=role_error)),
+            patch("app.services.account_role_sync.sync_account_roles", new=AsyncMock(return_value=[object(), object()])),
         ):
             await main.qr_login_websocket(socket, grant["session_id"])
         return socket, dbs, persist
@@ -160,15 +176,51 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         dbs[-1].add.assert_called_once_with(saved)
         dbs[-1].commit.assert_awaited_once()
         self.assertEqual(socket.send_json.call_args.args[0]["type"], "success")
+        self.assertEqual(socket.send_json.call_args.args[0]["roles_count"], 2)
+        self.assertEqual(socket.send_json.call_args.args[0]["roles_sync_status"], "success")
 
     async def test_legitimate_refresh_saves_only_server_target(self):
         grant, _ = self.issue(22)
-        account = MihoyoAccount(id=22, user_id=11)
+        account = MihoyoAccount(id=22, user_id=11, mihoyo_uid="11", stuid="11")
         socket, dbs, persist = await self.connect(grant, [[object(), account], [object(), account]])
         self.assertIs(persist.call_args.args[0], account)
         dbs[-1].add.assert_not_called()
         dbs[-1].commit.assert_awaited_once()
         self.assertEqual(socket.send_json.call_args.args[0]["account_id"], 22)
+
+    async def test_different_uid_refresh_rejects_before_credentials_change(self):
+        grant, _ = self.issue(22)
+        account = MihoyoAccount(id=22, user_id=11, mihoyo_uid="99", stuid="99", stoken_encrypted="old-secret")
+        socket, dbs, _ = await self.connect(grant, [[object(), account], [object(), account]])
+        self.assertEqual(account.mihoyo_uid, "99")
+        self.assertEqual(account.stoken_encrypted, "old-secret")
+        dbs[-1].commit.assert_not_awaited()
+        message = socket.send_json.call_args.args[0]
+        self.assertEqual(message["type"], "error")
+        self.assertIn("添加账号", message["message"])
+
+    async def test_role_request_failure_keeps_binding_and_reports_pending(self):
+        grant, _ = self.issue()
+        socket, dbs, persist = await self.connect(grant, [[object()], [object()]], role_error=RoleFetchError("失败"))
+        dbs[-1].commit.assert_awaited_once()
+        self.assertEqual(persist.call_args.args[0].credential_status, "valid")
+        self.assertEqual(persist.call_args.args[0].cookie_status, "valid")
+        result = socket.send_json.call_args.args[0]
+        self.assertEqual(result["type"], "success")
+        self.assertEqual(result["roles_sync_status"], "pending")
+        self.assertIsNone(result["roles_count"])
+        self.assertIn("账号已绑定", result["message"])
+        self.assertIn("校验登录态", result["message"])
+
+    async def test_cookie_completion_failure_reports_pending_without_losing_root_credentials(self):
+        grant, _ = self.issue()
+        socket, dbs, persist = await self.connect(grant, [[object()], [object()]], cookie_state="network_error")
+        dbs[-1].commit.assert_awaited_once()
+        self.assertEqual(persist.call_args.args[0].credential_status, "valid")
+        self.assertEqual(persist.call_args.args[0].cookie_status, "unknown")
+        result = socket.send_json.call_args.args[0]
+        self.assertEqual(result["roles_sync_status"], "pending")
+        self.assertIsNone(result["roles_count"])
 
 
 if __name__ == "__main__":

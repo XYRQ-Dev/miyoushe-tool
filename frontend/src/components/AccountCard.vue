@@ -52,13 +52,14 @@
 
     <div class="roles-section">
       <div class="section-label">
-        <span class="label-text">活跃角色 ({{ account.game_roles?.length || 0 }})</span>
+        <span class="label-text">游戏角色（含停用记录）({{ account.game_roles?.length || 0 }})</span>
       </div>
       
       <div v-if="account.game_roles?.length" class="role-list">
         <div v-for="role in sortedGameRoles" :key="role.id" class="role-item">
           <div class="role-main-info">
             <span class="role-nickname">{{ role.nickname || role.game_uid }}</span>
+            <span v-if="!role.is_enabled" class="unsupported-tag">已停用</span>
             <span v-if="!isCheckinSupported(role.game_biz)" class="unsupported-tag">签到未适配</span>
           </div>
           <div class="role-meta-info">

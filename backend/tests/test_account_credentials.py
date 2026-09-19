@@ -262,6 +262,8 @@ class AccountCredentialTests(MySqlIsolatedAsyncioTestCase):
             service.verify_cookie = AsyncMock(return_value={"state": "expired", "message": "Cookie 已过期"})
 
             with patch("app.services.account_credentials.httpx.AsyncClient", new=lambda *args, **kwargs: fake_client), patch(
+                "app.services.account_role_sync.fetch_game_roles", new=AsyncMock(return_value=[]),
+            ), patch(
                 "app.services.login_state.notification_service.send_reauth_required_notification",
                 new_callable=AsyncMock,
             ) as mock_notify:
@@ -376,6 +378,136 @@ class LegacyAccountUpgradeTests(MySqlIsolatedAsyncioTestCase):
 
 
 class AccountRoleSyncTests(MySqlIsolatedAsyncioTestCase):
+    async def _create_account(self, session):
+        user = User(username="role-sync-user", password_hash="x", role="user", is_active=True)
+        session.add(user)
+        await session.flush()
+        account = MihoyoAccount(
+            user_id=user.id, mihoyo_uid="10001", stuid="10001", mid="test-mid",
+            stoken_encrypted=encrypt_text("test-stoken"), credential_status="valid",
+            cookie_encrypted=encrypt_cookie("test-cookie"), cookie_status="valid",
+        )
+        session.add(account)
+        await session.flush()
+        return account
+
+    async def test_first_and_repeated_sync_deduplicate_and_preserve_disabled_preference(self):
+        from sqlalchemy import select
+        from app.services.account_role_sync import sync_account_roles
+
+        async with await self._new_session() as session:
+            account = await self._create_account(session)
+            payload = {"game_biz": "hk4e_cn", "game_uid": "80001", "region": "cn_gf01"}
+            first = await sync_account_roles(db=session, account_id=account.id, role_payloads=[payload, payload])
+            role_id = first[0].id
+            self.assertTrue(first[0].is_enabled)
+            first[0].is_enabled = False
+            second = await sync_account_roles(db=session, account_id=account.id, role_payloads=[payload])
+            await session.commit()
+            rows = (await session.execute(select(GameRole).where(GameRole.account_id == account.id))).scalars().all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(second[0].id, role_id)
+            self.assertFalse(second[0].is_enabled)
+
+    async def test_removed_roles_and_successful_empty_snapshot_preserve_logs(self):
+        from sqlalchemy import select
+        from app.services.account_role_sync import refresh_account_roles, sync_account_roles
+
+        async with await self._new_session() as session:
+            account = await self._create_account(session)
+            payloads = [
+                {"game_biz": "hk4e_cn", "game_uid": uid, "region": "cn_gf01"}
+                for uid in ("80001", "80002")
+            ]
+            roles = await sync_account_roles(db=session, account_id=account.id, role_payloads=payloads)
+            removed_id = roles[1].id
+            session.add(TaskLog(account_id=account.id, game_role_id=removed_id, task_type="checkin", status="success"))
+            await session.commit()
+            await sync_account_roles(db=session, account_id=account.id, role_payloads=payloads[:1])
+            await session.commit()
+            self.assertTrue(roles[0].is_enabled)
+            self.assertFalse(roles[1].is_enabled)
+            with patch("app.services.account_role_sync.fetch_game_roles", new=AsyncMock(return_value=[])):
+                empty = await refresh_account_roles(db=session, account=account)
+            await session.commit()
+            self.assertEqual(empty["roles_sync_status"], "success")
+            self.assertEqual(empty["roles_count"], 0)
+            self.assertFalse(roles[0].is_enabled)
+            self.assertIsNotNone(await session.get(GameRole, removed_id))
+            log = (await session.execute(select(TaskLog).where(TaskLog.game_role_id == removed_id))).scalar_one()
+            self.assertEqual(log.status, "success")
+            reappeared = await sync_account_roles(db=session, account_id=account.id, role_payloads=payloads)
+            await session.commit()
+            self.assertEqual(reappeared[1].id, removed_id)
+            self.assertFalse(reappeared[1].is_enabled)
+
+    async def test_failed_fetch_preserves_credentials_roles_and_retry_recovers(self):
+        from app.services.account_role_sync import RoleFetchError, refresh_account_roles, sync_account_roles
+
+        async with await self._new_session() as session:
+            account = await self._create_account(session)
+            payload = {"game_biz": "hk4e_cn", "game_uid": "80001", "region": "cn_gf01"}
+            roles = await sync_account_roles(db=session, account_id=account.id, role_payloads=[payload])
+            with patch("app.services.account_role_sync.fetch_game_roles", new=AsyncMock(side_effect=RoleFetchError("失败"))):
+                result = await refresh_account_roles(db=session, account=account)
+            await session.commit()
+            self.assertEqual(result["roles_sync_status"], "pending")
+            self.assertIsNone(result["roles_count"])
+            self.assertTrue(roles[0].is_enabled)
+            self.assertEqual(decrypt_text(account.stoken_encrypted), "test-stoken")
+            self.assertEqual(account.credential_status, "valid")
+            self.assertEqual(account.cookie_status, "valid")
+            service = LoginStateService(session)
+            service.verify_cookie = AsyncMock(return_value={"state": "valid", "message": "登录态有效"})
+            with patch("app.services.account_role_sync.fetch_game_roles", new=AsyncMock(return_value=[payload])):
+                result = await service.refresh_account_login_state(account)
+            self.assertEqual(result["roles_count"], 1)
+            self.assertEqual(result["roles_sync_status"], "success")
+            self.assertEqual(account.last_refresh_status, "valid")
+
+    async def test_sync_write_failure_rolls_back_roles_but_keeps_new_credentials(self):
+        from app.services.account_role_sync import refresh_account_roles
+
+        async with await self._new_session() as session:
+            account = await self._create_account(session)
+
+            async def failing_sync(**kwargs):
+                session.add(GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="80001"))
+                await session.flush()
+                raise RuntimeError("模拟同步中断")
+
+            with patch("app.services.account_role_sync.fetch_game_roles", new=AsyncMock(return_value=[])), patch(
+                "app.services.account_role_sync.sync_account_roles", new=failing_sync,
+            ):
+                result = await refresh_account_roles(db=session, account=account)
+            await session.commit()
+            account_id = account.id
+        async with await self._new_session() as session:
+            from sqlalchemy import select
+            stored = await session.get(MihoyoAccount, account_id)
+            self.assertEqual(decrypt_text(stored.stoken_encrypted), "test-stoken")
+            self.assertEqual(result["roles_sync_status"], "pending")
+            self.assertEqual((await session.execute(select(GameRole).where(GameRole.account_id == account_id))).scalars().all(), [])
+
+    async def test_missing_work_cookie_is_repaired_and_initial_roles_are_synced(self):
+        from app.services.account_credentials import AccountCredentialService
+
+        async with await self._new_session() as session:
+            account = await self._create_account(session)
+            account.cookie_encrypted = None
+            account.cookie_status = "unknown"
+            account.ltoken_encrypted = encrypt_text("test-ltoken")
+            account.cookie_token_encrypted = encrypt_text("test-cookie-token")
+            service = LoginStateService(session)
+            payload = {"game_biz": "hk4e_cn", "game_uid": "80001", "region": "cn_gf01"}
+            with patch.object(AccountCredentialService, "refresh_root_tokens", new=AsyncMock(return_value={"state": "valid"})), patch(
+                "app.services.account_role_sync.fetch_game_roles", new=AsyncMock(return_value=[payload]),
+            ):
+                result = await service.refresh_account_login_state(account)
+            self.assertEqual(result["cookie_status"], "valid")
+            self.assertEqual(result["roles_count"], 1)
+            self.assertEqual(result["roles_sync_status"], "success")
+
     async def test_sync_account_roles_preserves_identity_and_checkin_logs(self):
         from sqlalchemy import select
 
@@ -449,6 +581,35 @@ class AccountRoleSyncTests(MySqlIsolatedAsyncioTestCase):
         self.assertFalse(synced_roles[0].is_enabled)
         self.assertEqual(preserved_log.status, "success")
         self.assertEqual(preserved_log.message, "刷新前已签到")
+
+
+class RoleFetchUnitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_empty_is_distinct_from_business_or_malformed_failure(self):
+        from app.services.account_role_sync import RoleFetchError, fetch_game_roles
+
+        for payload in (
+            {"retcode": -100, "data": {"list": []}},
+            {"retcode": 0, "data": {}},
+            {"retcode": 0, "data": {"list": [None]}},
+            {"retcode": 0, "data": {"list": [{"game_biz": "hk4e_cn"}]}},
+        ):
+            with self.subTest(payload=payload), patch(
+                "app.services.account_role_sync.httpx.AsyncClient", return_value=_FakeAsyncClient([payload]),
+            ):
+                with self.assertRaises(RoleFetchError):
+                    await fetch_game_roles("test-cookie")
+        with patch("app.services.account_role_sync.httpx.AsyncClient", return_value=_FakeAsyncClient([{"retcode": 0, "data": {"list": []}}])):
+            self.assertEqual(await fetch_game_roles("test-cookie"), [])
+
+    async def test_transport_and_json_errors_do_not_become_empty_snapshot(self):
+        from app.services.account_role_sync import RoleFetchError, fetch_game_roles
+
+        for error in (TimeoutError(), ValueError("invalid JSON")):
+            client = _FakeAsyncClient([])
+            client.get = AsyncMock(side_effect=error)
+            with patch("app.services.account_role_sync.httpx.AsyncClient", return_value=client):
+                with self.assertRaises(RoleFetchError):
+                    await fetch_game_roles("test-cookie")
 
 
 if __name__ == "__main__":

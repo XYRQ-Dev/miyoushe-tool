@@ -145,7 +145,11 @@ async function handleCheckLoginState(account: AccountItem) {
   try {
     const { data } = await accountApi.checkLoginState(account.id)
     const updatedMessage = data.message || data.last_refresh_message || '已完成登录态校验，并已尝试修复'
-    ElMessage.success(updatedMessage)
+    if (data.roles_sync_status === 'pending' || data.cookie_status !== 'valid' || data.last_refresh_status === 'network_error') {
+      ElMessage.warning(updatedMessage)
+    } else {
+      ElMessage.success(updatedMessage)
+    }
     await loadAccounts()
   } catch (e) {
     // 错误已在拦截器中处理
@@ -201,12 +205,16 @@ function getCredentialBannerDescription(account: AccountItem) {
   return '可先执行一次登录态校验再确认。'
 }
 
-function onLoginSuccess() {
+function onLoginSuccess(result?: { roles_sync_status: string; message: string }) {
   const refreshedExistingAccount = currentRefreshAccountId.value !== null
   qrDialogVisible.value = false
   currentRefreshAccountId.value = null
   loadAccounts()
-  ElMessage.success(refreshedExistingAccount ? '已升级高权限登录态' : '高权限账号绑定成功')
+  if (result?.roles_sync_status === 'pending') {
+    ElMessage.warning(result.message)
+  } else {
+    ElMessage.success(result?.message || (refreshedExistingAccount ? '已升级高权限登录态' : '高权限账号绑定成功'))
+  }
 }
 
 onMounted(loadAccounts)

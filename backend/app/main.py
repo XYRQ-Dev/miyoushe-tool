@@ -24,7 +24,8 @@ from app.config import detect_setting_source, settings
 from app.database import init_db, async_session
 from app.models.account import MihoyoAccount
 from app.models.user import User
-from app.services.account_credentials import AccountCredentialService
+from app.services.account_credentials import AccountCredentialService, AccountUidMismatchError
+from app.services.account_role_sync import refresh_account_roles
 from app.services.browser import browser_manager
 from app.services.passport_login import PassportQrLoginSession, QrAuthorizationError, passport_login_manager
 from app.services.scheduler import scheduler_service
@@ -216,16 +217,24 @@ async def qr_login_websocket(
                     # 如果继续在 WebSocket 成功分支手写一组字段，后续短信登录、自愈重建和旧账号升级
                     # 很快就会出现状态字段不一致的问题，维护者也无法再判断“哪个入口才是准绳”。
                     credential_service = AccountCredentialService(db)
-                    await credential_service.persist_login_result(account, login_result)
+                    credential_result = await credential_service.persist_login_result(account, login_result)
+                    roles_result = {"roles_sync_status": "pending", "roles_count": None}
+                    if credential_result["state"] == "valid":
+                        roles_result = await refresh_account_roles(db=db, account=account)
+                    else:
+                        account.last_refresh_message = (
+                            f"{account.last_refresh_message}；角色同步待重试，请先通过“校验登录态”恢复工作 Cookie"
+                        )
 
                     await db.commit()
                     await db.refresh(account)
 
                 await websocket.send_json({
                     "type": "success",
-                    "message": account.last_refresh_message or "高权限根凭据已保存",
+                    "message": f"账号已绑定；{account.last_refresh_message or '高权限根凭据已保存'}",
                     "account_id": account.id,
-                    "roles_count": 0,
+                    "roles_count": roles_result["roles_count"],
+                    "roles_sync_status": roles_result["roles_sync_status"],
                 })
                 break
 
@@ -248,7 +257,7 @@ async def qr_login_websocket(
                 "message": "扫码登录超时（3分钟），请重试",
             })
 
-    except QrAuthorizationError as exc:
+    except (QrAuthorizationError, AccountUidMismatchError) as exc:
         try:
             await websocket.send_json({"type": "error", "message": str(exc)})
         except (RuntimeError, WebSocketDisconnect):

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import MihoyoAccount
 from app.models.user import User
 from app.services.account_credentials import AccountCredentialService
+from app.services.account_role_sync import refresh_account_roles
 from app.services.notifier import notification_service
 from app.utils.crypto import decrypt_cookie
 from app.utils.device import generate_device_id, get_default_headers
@@ -114,6 +115,13 @@ class LoginStateService:
             return {"state": "expired", "message": "Cookie 已过期"}
         return {"state": "expired", "message": f"Cookie 校验失败（code: {retcode}）"}
 
+    async def _finish_valid_login_state(self, account: MihoyoAccount) -> dict[str, Any]:
+        roles_result = await refresh_account_roles(db=self.db, account=account)
+        await self.db.commit()
+        result = await self._build_result(account, account.last_refresh_message)
+        result.update({key: roles_result[key] for key in ("roles_sync_status", "roles_count")})
+        return result
+
     async def refresh_account_login_state(self, account: MihoyoAccount) -> dict[str, Any]:
         previous_status = account.cookie_status
         now = utc_now_naive()
@@ -144,8 +152,7 @@ class LoginStateService:
             account.last_refresh_status = "valid"
             account.last_refresh_message = verify_result["message"]
             account.reauth_notified_at = None
-            await self.db.commit()
-            return await self._build_result(account, verify_result["message"])
+            return await self._finish_valid_login_state(account)
 
         if verify_result["state"] == "network_error":
             account.last_refresh_status = "network_error"
@@ -162,8 +169,7 @@ class LoginStateService:
             account.last_refresh_status = "valid"
             account.last_refresh_message = repair_result["message"]
             account.reauth_notified_at = None
-            await self.db.commit()
-            return await self._build_result(account, repair_result["message"])
+            return await self._finish_valid_login_state(account)
 
         if repair_result["state"] == "network_error":
             account.last_refresh_status = "network_error"

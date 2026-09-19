@@ -1,6 +1,6 @@
 """米哈游账号和游戏角色的 Pydantic 模型"""
 
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel
 
 from app.utils.timezone import ShanghaiDateTime
@@ -52,6 +52,20 @@ class AccountResponse(BaseModel):
 class AccountListResponse(BaseModel):
     accounts: List[AccountResponse]
     total: int
+
+
+class LoginStateResponse(BaseModel):
+    account_id: int
+    cookie_status: str
+    message: str
+    last_refresh_status: Optional[str] = None
+    last_refresh_message: Optional[str] = None
+    last_refresh_attempt_at: Optional[ShanghaiDateTime] = None
+    last_cookie_check: Optional[ShanghaiDateTime] = None
+    reauth_notified_at: Optional[ShanghaiDateTime] = None
+    roles_sync_status: Optional[Literal["success", "pending"]] = None
+    # null 表示尚未取得完整快照；成功空列表必须返回 0
+    roles_count: Optional[int] = None
 
 
 class QrLoginStartResponse(BaseModel):

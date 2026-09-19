@@ -1507,7 +1507,10 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             service = LoginStateService(session)
             service.verify_cookie = AsyncMock(return_value={"state": "valid", "message": "登录态有效"})
 
-            with patch("app.services.login_state.notification_service.send_reauth_required_notification", new_callable=AsyncMock) as mock_notify:
+            with patch("app.services.login_state.notification_service.send_reauth_required_notification", new_callable=AsyncMock) as mock_notify, patch(
+                "app.services.login_state.refresh_account_roles",
+                new=AsyncMock(return_value={"roles_sync_status": "success", "roles_count": 0}),
+            ):
                 result = await service.refresh_account_login_state(account)
 
         self.assertEqual(result["cookie_status"], "valid")

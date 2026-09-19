@@ -40,6 +40,7 @@ from app.services.checkin_rewards import (
 )
 from app.services.geetest import parse_checkin_risk
 from app.services.login_state import LoginStateService
+from app.services.account_role_sync import fetch_game_roles
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_cookie
 from app.utils.device import (
@@ -51,7 +52,7 @@ from app.utils.device import (
     generate_device_fp,
     generate_device_id,
 )
-from app.utils.ds import generate_cn_dynamic_secret, generate_ds
+from app.utils.ds import generate_cn_dynamic_secret
 from app.utils.timezone import get_shanghai_date, get_shanghai_day_utc_range, utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,6 @@ logger = logging.getLogger(__name__)
 SIGN_INFO_URL = "https://api-takumi.mihoyo.com/event/luna/info"
 SIGN_URL = "https://api-takumi.mihoyo.com/event/luna/sign"
 SIGN_REWARDS_URL = "https://api-takumi.mihoyo.com/event/luna/home"
-GAME_ROLES_URL = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie"
 
 
 @dataclass(frozen=True)
@@ -767,26 +767,5 @@ class CheckinService:
         await asyncio.sleep(delay_ms / 1000)
 
     async def fetch_game_roles(self, cookie: str) -> list[dict[str, Any]]:
-        """
-        通过 Cookie 获取该账号绑定的所有游戏角色。
-
-        这里仍沿用现有通用接口，不强行复用签到风控延迟逻辑，
-        以免把“签到节流”误扩散到账号导入链路。
-        """
-        device_id = generate_device_id()
-        headers = build_hyperion_headers(
-            cookie,
-            device_id=device_id,
-            device_fp=generate_device_fp(),
-            ds=generate_ds(),
-            app_version=HYPERION_APP_VERSION,
-        )
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(GAME_ROLES_URL, headers=headers)
-            data = response.json()
-            if data.get("retcode") == 0:
-                return data.get("data", {}).get("list", [])
-
-            logger.warning("获取游戏角色失败: %s", data)
-            return []
+        """兼容已有调用入口；请求失败抛出 RoleFetchError，不再伪装成空列表"""
+        return await fetch_game_roles(cookie)

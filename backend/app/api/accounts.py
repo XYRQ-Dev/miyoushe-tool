@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
-from app.schemas.account import AccountResponse, AccountListResponse, QrLoginStartResponse
+from app.schemas.account import AccountResponse, AccountListResponse, LoginStateResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
 from app.services.login_state import LoginStateService
 from app.services.passport_login import PassportLoginService, passport_login_manager
@@ -226,7 +226,7 @@ async def refresh_cookie(
     )
 
 
-@router.post("/{account_id}/refresh-login-state")
+@router.post("/{account_id}/refresh-login-state", response_model=LoginStateResponse)
 async def refresh_login_state(
     account_id: int,
     current_user: User = Depends(get_current_user),
