@@ -115,11 +115,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Loading, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { accountApi } from '../api'
-import { useUserStore } from '../stores/user'
 
 type QrStatus = 'initializing' | 'qr_ready' | 'scanned' | 'success' | 'failed' | 'timeout'
 type LoginTab = 'qr' | 'sms'
@@ -132,13 +131,11 @@ type SmsVerifyResult = {
 
 const props = defineProps<{
   visible: boolean
-  sessionId: string
   accountId?: number | null
 }>()
 
 const emit = defineEmits(['update:visible', 'success'])
 
-const userStore = useUserStore()
 const activeTab = ref<LoginTab>('qr')
 const status = ref<QrStatus>('initializing')
 const qrImage = ref('')
@@ -162,6 +159,7 @@ const canVerifySms = computed(() => Boolean(
 ))
 
 let ws: WebSocket | null = null
+let qrAttempt = 0
 let successTimer: number | null = null
 
 function getDisplayErrorMessage(message: string) {
@@ -185,8 +183,10 @@ function clearSuccessTimer() {
 }
 
 function cleanupQrSocket() {
+  qrAttempt += 1
   clearSuccessTimer()
   if (ws) {
+    ws.onopen = null
     ws.onmessage = null
     ws.onerror = null
     ws.onclose = null
@@ -231,7 +231,8 @@ function applyQrProgressStatus(nextStatus: string) {
     return
   }
 
-  if (nextStatus === 'scanned' || nextStatus === 'success' || nextStatus === 'failed' || nextStatus === 'timeout') {
+  // 官方确认不代表已通过写库前授权检查，只有最终 success 消息才能展示绑定成功
+  if (nextStatus === 'scanned' || nextStatus === 'failed' || nextStatus === 'timeout') {
     status.value = nextStatus
   }
 }
@@ -240,64 +241,75 @@ function handleDialogClose() {
   resetDialogState()
 }
 
-function startQrLogin() {
-  if (!props.sessionId) {
-    status.value = 'failed'
-    errorMessage.value = '缺少高权限登录会话，请关闭弹窗后重试'
-    return
-  }
-
+async function startQrLogin() {
   resetQrState()
-
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  const userId = userStore.userInfo?.id || 0
-  const query = new URLSearchParams({ user_id: String(userId) })
-  if (props.accountId) {
-    query.set('account_id', String(props.accountId))
-  }
-  const wsUrl = `${protocol}//${host}/ws/qr/${props.sessionId}?${query.toString()}`
-
-  ws = new WebSocket(wsUrl)
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data)
-
-    switch (data.type) {
-      case 'status':
-        applyQrProgressStatus(String(data.status || ''))
-        break
-      case 'qr_code':
-        qrImage.value = data.image
-        status.value = 'qr_ready'
-        break
-      case 'success':
-        status.value = 'success'
-        rolesCount.value = data.roles_count || 0
-        clearSuccessTimer()
-        successTimer = window.setTimeout(() => emit('success'), 1500)
-        break
-      case 'error':
-        status.value = 'failed'
-        errorMessage.value = getDisplayErrorMessage(data.message || '')
-        break
-      case 'timeout':
-        status.value = 'timeout'
-        errorMessage.value = getDisplayErrorMessage(data.message || '')
-        break
-    }
-  }
-
-  ws.onerror = () => {
-    status.value = 'failed'
-    errorMessage.value = '连接失败，请检查网络'
-  }
-
-  ws.onclose = () => {
-    if (status.value === 'initializing' || status.value === 'qr_ready') {
+  const attempt = qrAttempt
+  try {
+    // 每次重试及切回扫码都重新签发，旧请求返回后不能接管新弹窗
+    const { data: grant } = props.accountId != null
+      ? await accountApi.refreshCookie(props.accountId)
+      : await accountApi.startQrLogin()
+    if (attempt !== qrAttempt || !props.visible || activeTab.value !== 'qr') return
+    if (!grant.session_id || !grant.credential) {
       status.value = 'failed'
-      errorMessage.value = '连接已断开'
+      errorMessage.value = '扫码协议已更新，请刷新页面后重试'
+      return
     }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const host = window.location.host
+    const wsUrl = `${protocol}//${host}/ws/qr/${encodeURIComponent(grant.session_id)}`
+
+    ws = new WebSocket(wsUrl)
+    const socket = ws
+    ws.onopen = () => {
+      socket.send(JSON.stringify({ type: 'authenticate', credential: grant.credential }))
+      grant.credential = ''
+    }
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+
+      switch (data.type) {
+        case 'status':
+          applyQrProgressStatus(String(data.status || ''))
+          break
+        case 'qr_code':
+          qrImage.value = data.image
+          status.value = 'qr_ready'
+          break
+        case 'success':
+          status.value = 'success'
+          rolesCount.value = data.roles_count || 0
+          clearSuccessTimer()
+          successTimer = window.setTimeout(() => emit('success'), 1500)
+          break
+        case 'error':
+          status.value = 'failed'
+          errorMessage.value = getDisplayErrorMessage(data.message || '')
+          break
+        case 'timeout':
+          status.value = 'timeout'
+          errorMessage.value = getDisplayErrorMessage(data.message || '')
+          break
+      }
+    }
+
+    ws.onerror = () => {
+      status.value = 'failed'
+      errorMessage.value = '连接失败，请检查网络'
+    }
+
+    ws.onclose = () => {
+      if (status.value === 'initializing' || status.value === 'qr_ready' || status.value === 'scanned') {
+        status.value = 'failed'
+        errorMessage.value = '连接已断开'
+      }
+    }
+  } catch {
+    if (attempt !== qrAttempt) return
+    status.value = 'failed'
+    errorMessage.value = '无法创建扫码会话，请检查登录状态后重新获取二维码'
   }
 }
 
@@ -379,12 +391,7 @@ watch(activeTab, (tab) => {
   cleanupQrSocket()
 })
 
-watch(() => props.sessionId, (nextSessionId, previousSessionId) => {
-  if (!props.visible || activeTab.value !== 'qr') return
-  if (nextSessionId && nextSessionId !== previousSessionId) {
-    startQrLogin()
-  }
-})
+onBeforeUnmount(cleanupQrSocket)
 </script>
 
 <style scoped>

@@ -88,7 +88,6 @@
     <!-- 二维码登录弹窗 -->
     <QrLoginDialog
       v-model:visible="qrDialogVisible"
-      :session-id="currentSessionId"
       :account-id="currentRefreshAccountId"
       @success="onLoginSuccess"
     />
@@ -117,7 +116,6 @@ type AccountItem = {
 const accounts = ref<AccountItem[]>([])
 const loading = ref(false)
 const qrDialogVisible = ref(false)
-const currentSessionId = ref('')
 const currentRefreshAccountId = ref<number | null>(null)
 const accountsNeedingUpgrade = computed(() => (
   accounts.value.filter((account) => account.upgrade_required || !account.has_high_privilege_auth)
@@ -133,26 +131,14 @@ async function loadAccounts() {
   }
 }
 
-async function handleAddAccount() {
-  try {
-    const { data } = await accountApi.startQrLogin()
-    currentRefreshAccountId.value = null
-    currentSessionId.value = data.session_id
-    qrDialogVisible.value = true
-  } catch (e) {
-    // 错误已在拦截器中处理
-  }
+function handleAddAccount() {
+  currentRefreshAccountId.value = null
+  qrDialogVisible.value = true
 }
 
-async function handleRefreshCookie(account: AccountItem) {
-  try {
-    const { data } = await accountApi.refreshCookie(account.id)
-    currentRefreshAccountId.value = account.id
-    currentSessionId.value = data.session_id
-    qrDialogVisible.value = true
-  } catch (e) {
-    // 错误已在拦截器中处理
-  }
+function handleRefreshCookie(account: AccountItem) {
+  currentRefreshAccountId.value = account.id
+  qrDialogVisible.value = true
 }
 
 async function handleCheckLoginState(account: AccountItem) {

@@ -1,8 +1,8 @@
 # 环境变量
 .env
 
-# 本地路线图文档
-/docs/roadmap/
+# 本地文档
+/docs
 
 # Python
 __pycache__/

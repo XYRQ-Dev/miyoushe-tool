@@ -54,9 +54,16 @@ export const authApi = {
 }
 
 // ===== 账号 API =====
+export type QrLoginStartResponse = {
+  session_id: string
+  credential: string
+  expires_in: number
+  message: string
+}
+
 export const accountApi = {
   list: () => api.get('/accounts'),
-  startQrLogin: () => api.post('/accounts/qr-login'),
+  startQrLogin: () => api.post<QrLoginStartResponse>('/accounts/qr-login'),
   createSmsLoginCaptcha: (data: { mobile: string; aigis?: string }) =>
     api.post('/accounts/sms-login/captcha', data),
   verifySmsLogin: (data: {
@@ -66,7 +73,7 @@ export const accountApi = {
     aigis?: string
   }) => api.post('/accounts/sms-login/verify', data),
   delete: (id: number) => api.delete(`/accounts/${id}`),
-  refreshCookie: (id: number) => api.post(`/accounts/${id}/refresh-cookie`),
+  refreshCookie: (id: number) => api.post<QrLoginStartResponse>(`/accounts/${id}/refresh-cookie`),
   checkLoginState: (id: number) => api.post(`/accounts/${id}/refresh-login-state`),
 }
 

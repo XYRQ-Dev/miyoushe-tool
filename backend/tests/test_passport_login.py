@@ -6,7 +6,7 @@ os.environ["DATABASE_URL"] = "mysql+asyncmy://demo:demo@127.0.0.1:3306/miyoushe?
 
 from app.api import accounts as accounts_api
 from app.models.user import User
-from app.services.passport_login import PassportLoginService
+from app.services.passport_login import PassportLoginService, PassportQrLoginManager, QrAuthorizationError
 
 
 class _FakeResponse:
@@ -271,6 +271,54 @@ class PassportLoginTests(unittest.IsolatedAsyncioTestCase):
             action_type="login",
             aigis="risk-ticket",
         )
+
+
+class PassportQrGrantTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.manager = PassportQrLoginManager()
+
+    async def asyncTearDown(self):
+        for session in list(self.manager._sessions.values()):
+            await self.manager.remove_session(session)
+
+    async def test_grant_binds_owner_and_target_and_can_only_be_claimed_once(self):
+        grant = self.manager.issue_session(11, 22)
+        session = self.manager.claim_session(grant["session_id"], grant["credential"])
+        self.assertEqual((session.user_id, session.account_id), (11, 22))
+        with self.assertRaises(QrAuthorizationError):
+            self.manager.claim_session(grant["session_id"], grant["credential"])
+        self.assertIs(self.manager.get_session(grant["session_id"]), session)
+
+    async def test_forged_credential_cannot_consume_legitimate_grant(self):
+        grant = self.manager.issue_session(11)
+        with self.assertRaises(QrAuthorizationError):
+            self.manager.claim_session(grant["session_id"], "forged")
+        self.manager.claim_session(grant["session_id"], grant["credential"])
+        with self.assertRaises(QrAuthorizationError):
+            self.manager.claim_session("forged-id", grant["credential"])
+
+    async def test_expired_grant_is_rejected_and_removed(self):
+        grant = self.manager.issue_session(11)
+        with patch("app.services.passport_login.time.monotonic", return_value=float("inf")):
+            with self.assertRaises(QrAuthorizationError):
+                self.manager.claim_session(grant["session_id"], grant["credential"])
+        self.assertIsNone(self.manager.get_session(grant["session_id"]))
+
+    async def test_expiration_does_not_remove_claimed_session(self):
+        grant = self.manager.issue_session(11)
+        session = self.manager.claim_session(grant["session_id"], grant["credential"])
+        self.manager._expire_unclaimed(session)
+        self.assertIs(self.manager.get_session(grant["session_id"]), session)
+
+    async def test_unclaimed_expiration_and_old_instance_cleanup(self):
+        grant = self.manager.issue_session(11)
+        old = self.manager.get_session(grant["session_id"])
+        self.manager._expire_unclaimed(old)
+        self.assertIsNone(self.manager.get_session(grant["session_id"]))
+        replacement = type(old)(old.session_id, 12)
+        self.manager._sessions[old.session_id] = replacement
+        await self.manager.remove_session(old)
+        self.assertIs(self.manager.get_session(old.session_id), replacement)
 
 
 if __name__ == "__main__":

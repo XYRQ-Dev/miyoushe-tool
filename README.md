@@ -181,7 +181,6 @@ Windows 下后端会使用 `ProactorEventLoop`，否则 Playwright 扫码子进�
 
 旧的网页登录 Cookie-only 账号会显示「需要升级登录」。对这类账号点「校验登录态」不会自动补齐高权限能力，需要重新扫码。
 
-登录凭据分层、状态语义和维护红线见 [docs/maintenance/passport-high-privilege-login.md](docs/maintenance/passport-high-privilege-login.md)。
 
 ### 签到
 

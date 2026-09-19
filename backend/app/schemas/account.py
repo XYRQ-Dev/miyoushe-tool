@@ -56,4 +56,6 @@ class AccountListResponse(BaseModel):
 
 class QrLoginStartResponse(BaseModel):
     session_id: str
+    credential: str
+    expires_in: int
     message: str = "请使用米游社 App 扫描二维码完成高权限登录"

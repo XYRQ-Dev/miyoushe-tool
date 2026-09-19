@@ -16,10 +16,15 @@
 """
 
 import base64
+import asyncio
+import hashlib
 import io
 import logging
 import random
+import secrets
 import string
+import time
+import uuid
 from typing import Any, Optional
 
 import httpx
@@ -267,10 +272,12 @@ class PassportQrLoginSession:
         session_id: str,
         user_id: int,
         *,
+        account_id: int | None = None,
         login_service: PassportLoginService | None = None,
     ):
         self.session_id = session_id
         self.user_id = user_id
+        self.account_id = account_id
         self.login_service = login_service or PassportLoginService()
         self.status = "pending"
         self.ticket: Optional[str] = None
@@ -284,9 +291,9 @@ class PassportQrLoginSession:
             self.ticket = qr_login["ticket"]
             self.qr_url = qr_login["url"]
             self.status = "pending"
-        except Exception as exc:
+        except Exception:
             self.status = "failed"
-            self.error_message = f"创建官方二维码失败: {exc}"
+            self.error_message = "创建官方二维码失败，请稍后重试"
             logger.warning("[%s] %s", self.session_id, self.error_message)
             raise
 
@@ -300,9 +307,9 @@ class PassportQrLoginSession:
             image = PassportLoginService.build_qr_png_base64(self.qr_url)
             self.status = "qr_ready"
             return image
-        except Exception as exc:
+        except Exception:
             self.status = "failed"
-            self.error_message = f"生成二维码图片失败: {exc}"
+            self.error_message = "生成二维码图片失败，请重试"
             logger.warning("[%s] %s", self.session_id, self.error_message)
             return None
 
@@ -317,9 +324,9 @@ class PassportQrLoginSession:
 
         try:
             result = await self.login_service.query_qr_login_status(self.ticket)
-        except Exception as exc:
+        except Exception:
             self.status = "failed"
-            self.error_message = f"查询二维码状态失败: {exc}"
+            self.error_message = "查询二维码状态失败，请重新获取二维码"
             logger.warning("[%s] %s", self.session_id, self.error_message)
             return self.status
 
@@ -333,7 +340,7 @@ class PassportQrLoginSession:
             return self.status
         if status == "Expired":
             self.status = "timeout"
-            self.error_message = str(result.get("message") or "官方二维码已过期，请重新扫码")
+            self.error_message = "官方二维码已过期，请重新扫码"
             return self.status
 
         self.status = "pending"
@@ -349,24 +356,64 @@ class PassportQrLoginSession:
         return None
 
 
+class QrAuthorizationError(ValueError):
+    """只包含可安全展示给客户端的扫码授权错误。"""
+
+
 class PassportQrLoginManager:
-    """管理活跃的官方 Passport 二维码登录会话。"""
+    """单进程事件循环内签发、一次性领取和清理扫码会话。"""
+
+    credential_ttl = 60
 
     def __init__(self):
         self._sessions: dict[str, PassportQrLoginSession] = {}
+        self._grants: dict[str, tuple[str, float, asyncio.TimerHandle]] = {}
 
-    def create_session(self, session_id: str, user_id: int) -> PassportQrLoginSession:
-        session = PassportQrLoginSession(session_id, user_id)
+    def issue_session(self, user_id: int, account_id: int | None = None) -> dict[str, Any]:
+        session_id = str(uuid.uuid4())
+        credential = secrets.token_urlsafe(32)
+        session = PassportQrLoginSession(session_id, user_id, account_id=account_id)
         self._sessions[session_id] = session
+        timer = asyncio.get_running_loop().call_later(
+            self.credential_ttl, self._expire_unclaimed, session
+        )
+        self._grants[session_id] = (
+            hashlib.sha256(credential.encode()).hexdigest(),
+            time.monotonic() + self.credential_ttl,
+            timer,
+        )
+        return {"session_id": session_id, "credential": credential, "expires_in": self.credential_ttl}
+
+    def _expire_unclaimed(self, session: PassportQrLoginSession):
+        if self._sessions.get(session.session_id) is session and session.session_id in self._grants:
+            self._grants.pop(session.session_id)[2].cancel()
+            self._sessions.pop(session.session_id)
+
+    def claim_session(self, session_id: str, credential: str) -> PassportQrLoginSession:
+        grant = self._grants.get(session_id)
+        session = self._sessions.get(session_id)
+        if not grant or session is None:
+            raise QrAuthorizationError("扫码会话无效、已过期或已使用，请重新获取二维码")
+        if time.monotonic() >= grant[1]:
+            self._expire_unclaimed(session)
+            raise QrAuthorizationError("扫码会话已过期，请重新获取二维码")
+        if not secrets.compare_digest(grant[0], hashlib.sha256(credential.encode()).hexdigest()):
+            raise QrAuthorizationError("扫码会话凭证无效，请刷新页面后重试")
+        # 检查与消费之间不能 await，保证同一事件循环内只有一个连接领取成功
+        self._grants.pop(session_id)[2].cancel()
         return session
 
     def get_session(self, session_id: str) -> Optional[PassportQrLoginSession]:
         return self._sessions.get(session_id)
 
-    async def remove_session(self, session_id: str):
-        session = self._sessions.pop(session_id, None)
-        if session:
-            await session.close()
+    async def remove_session(self, session: PassportQrLoginSession):
+        # 失败或旧连接不能按路径 ID 清理其他连接持有的实例
+        if self._sessions.get(session.session_id) is session:
+            self._sessions.pop(session.session_id)
+            grant = self._grants.pop(session.session_id, None)
+            if grant:
+                grant[2].cancel()
+        await session.close()
 
 
 passport_login_manager = PassportQrLoginManager()

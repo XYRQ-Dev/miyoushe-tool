@@ -13,18 +13,20 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import detect_setting_source, settings
 from app.database import init_db, async_session
 from app.models.account import MihoyoAccount
+from app.models.user import User
 from app.services.account_credentials import AccountCredentialService
 from app.services.browser import browser_manager
-from app.services.passport_login import passport_login_manager
+from app.services.passport_login import PassportQrLoginSession, QrAuthorizationError, passport_login_manager
 from app.services.scheduler import scheduler_service
 from app.services.system_settings import SystemSettingsService
 from app.utils.timezone import configure_shanghai_logging
@@ -113,28 +115,63 @@ app.include_router(logs_router)
 app.include_router(admin_router)
 
 
+async def _check_qr_authorization(
+    db: AsyncSession, session: PassportQrLoginSession, *, lock: bool = False,
+) -> MihoyoAccount | None:
+    """领取及保存时使用新事务核对服务端身份，保存时锁定授权对象。"""
+    user_query = select(User).where(User.id == session.user_id, User.is_active.is_(True))
+    if lock:
+        user_query = user_query.with_for_update()
+    if (await db.execute(user_query)).scalar_one_or_none() is None:
+        raise QrAuthorizationError("用户已停用或不存在，请重新登录")
+    if session.account_id is None:
+        return None
+    account_query = select(MihoyoAccount).where(
+        MihoyoAccount.id == session.account_id,
+        MihoyoAccount.user_id == session.user_id,
+    )
+    if lock:
+        account_query = account_query.with_for_update()
+    account = (await db.execute(account_query)).scalar_one_or_none()
+    if account is None:
+        raise QrAuthorizationError("待刷新的账号不存在或不属于当前用户")
+    return account
+
+
 @app.websocket("/ws/qr/{session_id}")
 async def qr_login_websocket(
     websocket: WebSocket,
     session_id: str,
-    user_id: int = Query(...),
-    account_id: int | None = Query(default=None),
 ):
     """
     扫码登录 WebSocket 端点。
 
     流程：
-    1. 前端连接 WebSocket
+    1. 前端首帧提交已认证 HTTP 入口签发的一次性凭证
     2. 后端创建官方 Passport 二维码并推送二维码图片
     3. 轮询扫码状态并向前端同步进度
-    4. 登录成功后只保存高权限根凭据字段
-    5. 工作 Cookie 补齐留给后续任务，不在当前链路里伪造“已可直接业务调用”
+    4. 重新核对授权后保存高权限根凭据，并由凭据服务尝试补齐工作 Cookie
+    5. 提交成功后推送绑定结果
     """
     await websocket.accept()
 
-    session = passport_login_manager.create_session(session_id, user_id)
+    session = None
 
     try:
+        try:
+            frame = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        except (asyncio.TimeoutError, ValueError, RuntimeError):
+            raise QrAuthorizationError("未收到有效扫码凭证，请刷新页面后重新获取二维码") from None
+        if (
+            not isinstance(frame, dict)
+            or frame.get("type") != "authenticate"
+            or not isinstance(frame.get("credential"), str)
+            or not 1 <= len(frame["credential"]) <= 128
+        ):
+            raise QrAuthorizationError("扫码协议已更新，请刷新页面后重试")
+        session = passport_login_manager.claim_session(session_id, frame["credential"])
+        async with async_session() as db:
+            await _check_qr_authorization(db, session)
         await websocket.send_json({"type": "status", "status": "initializing"})
         await session.start()
 
@@ -168,22 +205,10 @@ async def qr_login_websocket(
                     return
 
                 async with async_session() as db:
-                    if account_id is not None:
-                        account_result = await db.execute(
-                            select(MihoyoAccount).where(
-                                MihoyoAccount.id == account_id,
-                                MihoyoAccount.user_id == user_id,
-                            )
-                        )
-                        account = account_result.scalar_one_or_none()
-                        if account is None:
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": "待刷新的账号不存在",
-                            })
-                            return
-                    else:
-                        account = MihoyoAccount(user_id=user_id)
+                    # 新事务重新检查并锁定用户与目标账号，避免等待扫码期间授权已变化
+                    account = await _check_qr_authorization(db, session, lock=True)
+                    if account is None:
+                        account = MihoyoAccount(user_id=session.user_id)
                         db.add(account)
                         await db.flush()
 
@@ -223,16 +248,27 @@ async def qr_login_websocket(
                 "message": "扫码登录超时（3分钟），请重试",
             })
 
+    except QrAuthorizationError as exc:
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+        except (RuntimeError, WebSocketDisconnect):
+            pass
     except WebSocketDisconnect:
-        logger.info(f"[{session_id}] WebSocket 连接断开")
+        logger.info("扫码 WebSocket 连接断开")
     except Exception:
-        logger.exception("[%s] WebSocket 错误", session_id)
+        # 异常内容可能包含上游票据或数据库参数，通道日志只记录固定事件
+        logger.error("扫码 WebSocket 通道异常")
         try:
             await websocket.send_json({"type": "error", "message": "二维码登录通道异常，请关闭页面后重试"})
         except Exception:
             pass
     finally:
-        await passport_login_manager.remove_session(session_id)
+        if session is not None:
+            await passport_login_manager.remove_session(session)
+        try:
+            await websocket.close()
+        except (RuntimeError, WebSocketDisconnect):
+            pass
 
 
 @app.get("/api/health")

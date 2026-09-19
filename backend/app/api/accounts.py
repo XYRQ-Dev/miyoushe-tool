@@ -6,7 +6,6 @@
 - 刷新 Cookie
 """
 
-import uuid
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -19,7 +18,7 @@ from app.models.account import MihoyoAccount, GameRole
 from app.schemas.account import AccountResponse, AccountListResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
 from app.services.login_state import LoginStateService
-from app.services.passport_login import PassportLoginService
+from app.services.passport_login import PassportLoginService, passport_login_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/accounts", tags=["米哈游账号"])
@@ -134,10 +133,9 @@ async def list_accounts(
 async def start_qr_login(current_user: User = Depends(get_current_user)):
     """
     发起官方 Passport 扫码登录会话。
-    返回 session_id，前端通过 WebSocket 连接获取二维码图片。
+    返回会话 ID 和短期一次性凭证，凭证仅通过 WebSocket 首帧提交。
     """
-    session_id = str(uuid.uuid4())
-    return QrLoginStartResponse(session_id=session_id)
+    return QrLoginStartResponse(**passport_login_manager.issue_session(current_user.id))
 
 
 @router.post("/sms-login/captcha")
@@ -206,18 +204,24 @@ async def delete_account(
     return {"message": "账号已删除"}
 
 
-@router.post("/{account_id}/refresh-cookie")
+@router.post("/{account_id}/refresh-cookie", response_model=QrLoginStartResponse)
 async def refresh_cookie(
     account_id: int,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     重新发起指定账号的高权限扫码登录。
     返回新的 session_id，与 qr-login 流程一致。
     """
-    session_id = str(uuid.uuid4())
+    result = await db.execute(select(MihoyoAccount).where(
+        MihoyoAccount.id == account_id,
+        MihoyoAccount.user_id == current_user.id,
+    ))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
     return QrLoginStartResponse(
-        session_id=session_id,
+        **passport_login_manager.issue_session(current_user.id, account_id),
         message="请重新扫码以更新高权限登录态",
     )
 
