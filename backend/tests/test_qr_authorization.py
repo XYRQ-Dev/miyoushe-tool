@@ -3,6 +3,7 @@
 import asyncio
 import os
 import unittest
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -53,7 +54,7 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         session.login_result = {"stoken": "test-secret", "stuid": "11", "mid": "test-mid"}
         return grant, session
 
-    async def connect(self, grant, rows, frame=None, receive_error=None, *, role_error=None, cookie_state="valid"):
+    async def connect(self, grant, rows, frame=None, receive_error=None, *, role_error=None, cookie_state="valid", account_busy=False):
         socket = MagicMock()
         socket.accept = AsyncMock()
         socket.receive_json = AsyncMock(
@@ -84,7 +85,16 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             return {"state": cookie_state, "message": "工作 Cookie 补齐结果"}
 
         persist = AsyncMock(side_effect=persist_result)
+
+        @asynccontextmanager
+        async def fake_account_operation(db, account_id):
+            # 此套件只验证扫码协议，真实 MySQL 互斥由数据库回归用例覆盖
+            if account_busy:
+                raise HTTPException(status_code=409, detail="账号正在签到或维护中，请稍后重试")
+            yield
+
         with (
+            patch.object(main, "account_operation", fake_account_operation),
             patch.object(main, "async_session", side_effect=contexts),
             patch.object(main.asyncio, "sleep", new=AsyncMock()),
             patch.object(main.AccountCredentialService, "persist_login_result", persist),
@@ -94,6 +104,18 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         ):
             await main.qr_login_websocket(socket, grant["session_id"])
         return socket, dbs, persist
+
+    async def test_busy_account_rejects_qr_save_with_retry_message(self):
+        grant, session = self.issue(target=22)
+        account = MihoyoAccount(id=22, user_id=11)
+        socket, dbs, persist = await self.connect(
+            grant, [[object(), account], [object(), account]], account_busy=True,
+        )
+        persist.assert_not_awaited()
+        dbs[-1].commit.assert_not_awaited()
+        message = socket.send_json.call_args.args[0]
+        self.assertEqual(message["type"], "error")
+        self.assertIn("稍后重试", message["message"])
 
     async def test_http_entrypoints_require_authentication(self):
         # 不进入 TestClient 上下文，避免运行初始化数据库及调度器的 lifespan

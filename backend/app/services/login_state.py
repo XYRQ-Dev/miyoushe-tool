@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import MihoyoAccount
 from app.models.user import User
 from app.services.account_credentials import AccountCredentialService
+from app.services.account_operations import account_operation, load_current_account
 from app.services.account_role_sync import refresh_account_roles
 from app.services.notifier import notification_service
 from app.utils.crypto import decrypt_cookie
@@ -123,6 +124,11 @@ class LoginStateService:
         return result
 
     async def refresh_account_login_state(self, account: MihoyoAccount) -> dict[str, Any]:
+        async with account_operation(self.db, account.id):
+            account = await load_current_account(self.db, account.id)
+            return await self._refresh_account_login_state(account)
+
+    async def _refresh_account_login_state(self, account: MihoyoAccount) -> dict[str, Any]:
         previous_status = account.cookie_status
         now = utc_now_naive()
         account.last_refresh_attempt_at = now

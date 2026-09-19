@@ -9,12 +9,14 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
+from app.models.task_log import TaskLog
+from app.services.account_operations import account_operation, load_current_account
 from app.schemas.account import AccountResponse, AccountListResponse, LoginStateResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
 from app.services.login_state import LoginStateService
@@ -182,7 +184,7 @@ async def delete_account(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除米哈游账号及其关联的游戏角色。"""
+    """原子删除当前用户的账号、全部角色及签到日志；账号忙时返回 409。"""
     result = await db.execute(
         select(MihoyoAccount).where(
             MihoyoAccount.id == account_id,
@@ -193,14 +195,15 @@ async def delete_account(
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
 
-    roles = await db.execute(
-        select(GameRole).where(GameRole.account_id == account_id)
-    )
-    for role in roles.scalars().all():
-        await db.delete(role)
-
-    await db.delete(account)
-    await db.commit()
+    async with account_operation(db, account_id):
+        account = await load_current_account(db, account_id)
+        if account.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        # 显式按外键依赖顺序删除，包含没有角色 ID 的账号级日志
+        await db.execute(delete(TaskLog).where(TaskLog.account_id == account_id))
+        await db.execute(delete(GameRole).where(GameRole.account_id == account_id))
+        await db.delete(account)
+        await db.commit()
     return {"message": "账号已删除"}
 
 

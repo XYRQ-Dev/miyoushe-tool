@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,7 @@ from app.services.checkin_rewards import (
 )
 from app.services.geetest import parse_checkin_risk
 from app.services.login_state import LoginStateService
+from app.services.account_operations import account_operation, load_current_account
 from app.services.account_role_sync import fetch_game_roles
 from app.services.system_settings import SystemSettingsService
 from app.utils.crypto import decrypt_cookie
@@ -224,100 +226,116 @@ class CheckinService:
 
         all_results: list[CheckinResult] = []
         login_state_service = LoginStateService(self.db)
-        latest_today_logs = await self._load_today_latest_role_logs(account_ids)
 
         async with httpx.AsyncClient(timeout=30) as client:
             device_state: tuple[str, str] | None = None
 
-            for account in accounts:
-                roles_result = await self.db.execute(
-                    select(GameRole).where(
-                        GameRole.account_id == account.id,
-                        GameRole.is_enabled.is_(True),
-                        GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
-                    )
-                )
-                roles = roles_result.scalars().all()
-
-                if not roles:
-                    logger.info("账号 %s 没有已启用且已适配签到的游戏角色，跳过", account.id)
-                    continue
-
-                roles_to_execute: list[GameRole] = []
-                for role in roles:
-                    latest_log = latest_today_logs.get(role.id)
-                    if latest_log and latest_log.status in ("success", "already_signed"):
-                        logger.info("角色 %s 今日已存在成功态日志，复用本地结果并跳过上游签到接口", role.game_uid)
-                        all_results.append(
-                            self._build_reused_already_signed_result(account, role, latest_log)
+            for account_id in account_ids:
+                try:
+                    async with account_operation(self.db, account_id):
+                        account = await load_current_account(self.db, account_id)
+                        latest_today_logs = await self._load_today_latest_role_logs([account_id])
+                        roles_result = await self.db.execute(
+                            select(GameRole).where(
+                                GameRole.account_id == account.id,
+                                GameRole.is_enabled.is_(True),
+                                GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
+                            )
                         )
-                        continue
-                    roles_to_execute.append(role)
+                        roles = roles_result.scalars().all()
 
-                if not roles_to_execute:
-                    continue
+                        if not roles:
+                            logger.info("账号 %s 没有已启用且已适配签到的游戏角色，跳过", account.id)
+                            await self.db.commit()
+                            continue
 
-                if account.cookie_status != "valid":
-                    login_state = await login_state_service.refresh_account_login_state(account)
-                    if login_state["cookie_status"] != "valid":
-                        for role in roles_to_execute:
+                        roles_to_execute: list[GameRole] = []
+                        for role in roles:
+                            latest_log = latest_today_logs.get(role.id)
+                            if latest_log and latest_log.status in ("success", "already_signed"):
+                                logger.info("角色 %s 今日已存在成功态日志，复用本地结果并跳过上游签到接口", role.game_uid)
+                                all_results.append(
+                                    self._build_reused_already_signed_result(account, role, latest_log)
+                                )
+                                continue
+                            roles_to_execute.append(role)
+
+                        if not roles_to_execute:
+                            await self.db.commit()
+                            continue
+
+                        if account.cookie_status != "valid":
+                            login_state = await login_state_service.refresh_account_login_state(account)
+                            if login_state["cookie_status"] != "valid":
+                                for role in roles_to_execute:
+                                    all_results.append(
+                                        CheckinResult(
+                                            account_id=account.id,
+                                            game_role_id=role.id,
+                                            status="failed",
+                                            message=login_state["message"],
+                                            **self._build_result_context(account, role),
+                                        )
+                                    )
+                                    self.db.add(
+                                        TaskLog(
+                                            account_id=account.id,
+                                            game_role_id=role.id,
+                                            task_type="checkin",
+                                            status="failed",
+                                            message=login_state["message"],
+                                        )
+                                    )
+                                await self.db.commit()
+                                continue
+                            # 校验或修复成功后继续本轮签到，并读取账号更新后的 Cookie
+
+                        try:
+                            cookie = decrypt_cookie(account.cookie_encrypted)
+                        except Exception as exc:
+                            logger.error("账号 %s Cookie 解密失败: %s", account.id, exc)
                             all_results.append(
                                 CheckinResult(
                                     account_id=account.id,
-                                    game_role_id=role.id,
                                     status="failed",
-                                    message=login_state["message"],
-                                    **self._build_result_context(account, role),
+                                    message=f"Cookie 解密失败: {exc}",
+                                    **self._build_result_context(account),
                                 )
                             )
+                            await self.db.commit()
+                            continue
+
+                        if device_state is None:
+                            device_state = await self._ensure_device_state(client)
+
+                        for role in roles_to_execute:
+                            result = await self._checkin_role(account, role, cookie, client, device_state)
+                            all_results.append(result)
                             self.db.add(
                                 TaskLog(
                                     account_id=account.id,
                                     game_role_id=role.id,
                                     task_type="checkin",
-                                    status="failed",
-                                    message=login_state["message"],
+                                    status=result.status,
+                                    message=result.message,
+                                    total_sign_days=result.total_sign_days,
+                                    reward_name=result.reward_name,
+                                    reward_cnt=result.reward_cnt,
+                                    reward_icon=result.reward_icon,
                                 )
                             )
+
                         await self.db.commit()
-                        continue
-                    # 校验或修复成功后继续本轮签到，并读取账号更新后的 Cookie
-
-                try:
-                    cookie = decrypt_cookie(account.cookie_encrypted)
-                except Exception as exc:
-                    logger.error("账号 %s Cookie 解密失败: %s", account.id, exc)
-                    all_results.append(
-                        CheckinResult(
-                            account_id=account.id,
+                except HTTPException as exc:
+                    if exc.status_code not in (404, 409):
+                        raise
+                    if exc.status_code == 409:
+                        all_results.append(CheckinResult(
+                            account_id=account_id,
                             status="failed",
-                            message=f"Cookie 解密失败: {exc}",
-                            **self._build_result_context(account),
-                        )
-                    )
-                    continue
-
-                if device_state is None:
-                    device_state = await self._ensure_device_state(client)
-
-                for role in roles_to_execute:
-                    result = await self._checkin_role(account, role, cookie, client, device_state)
-                    all_results.append(result)
-                    self.db.add(
-                        TaskLog(
-                            account_id=account.id,
-                            game_role_id=role.id,
-                            task_type="checkin",
-                            status=result.status,
-                            message=result.message,
-                            total_sign_days=result.total_sign_days,
-                            reward_name=result.reward_name,
-                            reward_cnt=result.reward_cnt,
-                            reward_icon=result.reward_icon,
-                        )
-                    )
-
-                await self.db.commit()
+                            message=exc.detail,
+                        ))
+                    logger.info("账号 %s 本轮跳过: %s", account_id, exc.detail)
 
         return CheckinSummary(
             total=len(all_results),

@@ -159,11 +159,12 @@ async function handleCheckLoginState(account: AccountItem) {
 async function handleDelete(account: AccountItem) {
   try {
     await ElMessageBox.confirm(
-      `确定删除账号「${account.nickname || account.mihoyo_uid}」？此操作不可撤销。`,
+      `确定删除账号「${account.nickname || account.mihoyo_uid}」及其全部游戏角色和历史签到日志？此操作不可撤销。`,
       '删除确认',
       { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
     )
     await accountApi.delete(account.id)
+    accounts.value = accounts.value.filter((item) => item.id !== account.id)
     ElMessage.success('账号已删除')
     await loadAccounts()
   } catch (e: any) {

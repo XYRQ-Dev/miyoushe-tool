@@ -22,7 +22,7 @@ from app.api.admin import (
     update_invite_code_settings,
     update_menu_visibility,
 )
-from app.api.accounts import list_accounts, refresh_login_state
+from app.api.accounts import delete_account, list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
 from app.api.tasks import execute_checkin, get_task_config, get_today_status, update_task_config
 from app.models.account import GameRole, MihoyoAccount
@@ -47,6 +47,7 @@ from app.services.admin_broadcast import AdminBroadcastService
 from app.services.checkin import CHECKIN_GAME_CONFIGS, CheckinApiError, CheckinGameConfig, CheckinService
 from app.services.geetest import GENERIC_RISK_MESSAGE, GEETEST_RISK_MESSAGE
 from app.services.login_state import LoginStateService
+from app.services.account_operations import account_operation
 from app.services.notifier import NotificationService
 from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, SchedulerService
 from app.services.system_settings import SystemSettingsService
@@ -114,6 +115,155 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         await session.flush()
         await session.refresh(user)
         return user
+
+    async def _create_delete_fixture(self, session, *, with_logs=True):
+        user = await self._create_user(session, "delete-owner")
+        other = await self._create_user(session, "delete-other")
+        account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
+        survivor = MihoyoAccount(user_id=other.id)
+        session.add_all([account, survivor])
+        await session.flush()
+        role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn")
+        session.add(role)
+        await session.flush()
+        if with_logs:
+            session.add_all([
+                TaskLog(account_id=account.id, game_role_id=role.id, status="success"),
+                TaskLog(account_id=account.id, game_role_id=None, status="failed"),
+            ])
+        session.add(TaskLog(account_id=survivor.id, status="success"))
+        await session.commit()
+        return user, other, account, survivor
+
+    async def test_delete_account_with_and_without_logs(self):
+        async with await self._new_session() as session:
+            user, other, account, survivor = await self._create_delete_fixture(session)
+            account_id, survivor_id = account.id, survivor.id
+            await delete_account(account_id, current_user=user, db=session)
+            empty = MihoyoAccount(user_id=user.id)
+            session.add(empty)
+            await session.commit()
+            empty_id = empty.id
+            await delete_account(empty_id, current_user=user, db=session)
+        async with await self._new_session() as session:
+            self.assertIsNone(await session.get(MihoyoAccount, account_id))
+            self.assertIsNone(await session.get(MihoyoAccount, empty_id))
+            self.assertIsNotNone(await session.get(MihoyoAccount, survivor_id))
+            self.assertEqual((await session.execute(select(func.count(GameRole.id)))).scalar_one(), 0)
+            logs = (await session.execute(select(TaskLog))).scalars().all()
+            self.assertEqual([log.account_id for log in logs], [survivor_id])
+
+    async def test_delete_account_rejects_other_user_and_missing_account(self):
+        async with await self._new_session() as session:
+            user, other, account, survivor = await self._create_delete_fixture(session)
+            for account_id in (account.id, survivor.id + 1000):
+                with self.assertRaises(HTTPException) as caught:
+                    await delete_account(account_id, current_user=other, db=session)
+                self.assertEqual(caught.exception.status_code, 404)
+            self.assertEqual((await session.execute(select(func.count(TaskLog.id)))).scalar_one(), 3)
+            self.assertIsNotNone(await session.get(MihoyoAccount, account.id))
+
+    async def test_delete_account_rolls_back_after_logs_deleted(self):
+        async with await self._new_session() as session:
+            user, other, account, survivor = await self._create_delete_fixture(session)
+            account_id = account.id
+            original_execute = session.execute
+
+            async def fail_role_delete(statement, *args, **kwargs):
+                if getattr(statement, "is_delete", False) and statement.table.name == "game_roles":
+                    raise RuntimeError("role deletion failed")
+                return await original_execute(statement, *args, **kwargs)
+
+            with patch.object(session, "execute", side_effect=fail_role_delete):
+                with self.assertRaisesRegex(RuntimeError, "role deletion failed"):
+                    await delete_account(account_id, current_user=user, db=session)
+        async with await self._new_session() as session:
+            self.assertIsNotNone(await session.get(MihoyoAccount, account_id))
+            self.assertEqual((await session.execute(select(func.count(GameRole.id)))).scalar_one(), 1)
+            self.assertEqual((await session.execute(select(func.count(TaskLog.id)))).scalar_one(), 3)
+            # 回滚后命名锁必须释放，后续删除可以重试
+            user = await session.get(User, 1)
+            await delete_account(account_id, current_user=user, db=session)
+
+    async def test_delete_account_commit_failure_restores_all_dependencies(self):
+        async with await self._new_session() as session:
+            user, other, account, survivor = await self._create_delete_fixture(session)
+            account_id = account.id
+            with patch.object(session, "commit", side_effect=RuntimeError("commit failed")):
+                with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                    await delete_account(account_id, current_user=user, db=session)
+        async with await self._new_session() as session:
+            self.assertIsNotNone(await session.get(MihoyoAccount, account_id))
+            self.assertEqual((await session.execute(select(func.count(GameRole.id)))).scalar_one(), 1)
+            self.assertEqual((await session.execute(select(func.count(TaskLog.id)))).scalar_one(), 3)
+
+    async def test_delete_account_conflicts_with_running_checkin_across_commit(self):
+        async with await self._new_session() as session:
+            user, other, account, survivor = await self._create_delete_fixture(session, with_logs=False)
+            user_id, account_id = user.id, account.id
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def run_checkin():
+            async with await self._new_session() as session:
+                service = CheckinService(session)
+
+                async def paused_role(account, role, *args):
+                    # 模拟维护中的提交，删除仍须被账号锁拒绝
+                    await session.commit()
+                    entered.set()
+                    await release.wait()
+                    return CheckinResult(account_id=account.id, game_role_id=role.id, status="success", message="ok")
+
+                with patch("app.services.checkin.decrypt_cookie", return_value="cookie"), patch.object(
+                    service, "_ensure_device_state", return_value=("device", "fp"),
+                ), patch.object(service, "_checkin_role", side_effect=paused_role):
+                    return await service.execute_for_user(user_id)
+
+        task = asyncio.create_task(run_checkin())
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=10)
+            async with await self._new_session() as session:
+                user = await session.get(User, user_id)
+                with self.assertRaises(HTTPException) as caught:
+                    await delete_account(account_id, current_user=user, db=session)
+                self.assertEqual(caught.exception.status_code, 409)
+        finally:
+            release.set()
+            summary = await asyncio.wait_for(task, timeout=10)
+        self.assertEqual(summary.success, 1)
+        async with await self._new_session() as session:
+            user = await session.get(User, user_id)
+            await delete_account(account_id, current_user=user, db=session)
+            self.assertEqual((await session.execute(
+                select(func.count(TaskLog.id)).where(TaskLog.account_id == account_id)
+            )).scalar_one(), 0)
+
+    async def test_refresh_stale_deleted_account_does_not_call_upstream(self):
+        async with await self._new_session() as stale_session:
+            user, other, account, survivor = await self._create_delete_fixture(stale_session)
+            account_id, user_id = account.id, user.id
+            async with await self._new_session() as session:
+                user = await session.get(User, user_id)
+                await delete_account(account_id, current_user=user, db=session)
+            service = LoginStateService(stale_session)
+            with patch.object(service, "verify_cookie") as verify:
+                with self.assertRaises(HTTPException) as caught:
+                    await service.refresh_account_login_state(account)
+                self.assertEqual(caught.exception.status_code, 404)
+                verify.assert_not_called()
+
+    async def test_account_lock_allows_nested_refresh_and_releases_after_cancellation(self):
+        async with await self._new_session() as session:
+            user, other, account, survivor = await self._create_delete_fixture(session)
+            account_id = account.id
+            with self.assertRaises(asyncio.CancelledError):
+                async with account_operation(session, account_id):
+                    async with account_operation(session, account_id):
+                        await session.commit()
+                    raise asyncio.CancelledError()
+        async with await self._new_session() as session:
+            async with account_operation(session, account_id):
+                self.assertIsNotNone(await session.get(MihoyoAccount, account_id))
 
     async def test_register_creates_default_task_config(self):
         async with await self._new_session() as session:

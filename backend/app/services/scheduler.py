@@ -14,6 +14,7 @@ from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
@@ -348,8 +349,16 @@ class SchedulerService:
 
             login_state_service = LoginStateService(db)
 
-            for account in accounts:
-                await login_state_service.refresh_account_login_state(account)
+            for account_id in [account.id for account in accounts]:
+                try:
+                    account = await db.get(MihoyoAccount, account_id)
+                    if account is None:
+                        continue
+                    await login_state_service.refresh_account_login_state(account)
+                except HTTPException as exc:
+                    if exc.status_code not in (404, 409):
+                        raise
+                    logger.info("巡检跳过账号: %s", exc.detail)
 
             logger.info(f"网页登录态巡检完成，共处理 {len(accounts)} 个账号")
 
