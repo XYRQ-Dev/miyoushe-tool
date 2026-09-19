@@ -21,6 +21,7 @@ from app.api.admin import (
     update_email_settings,
     update_invite_code_settings,
     update_menu_visibility,
+    toggle_user_active,
 )
 from app.api.accounts import delete_account, list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
@@ -51,6 +52,7 @@ from app.services.account_operations import account_operation
 from app.services.notifier import NotificationService
 from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, SchedulerService
 from app.services.system_settings import SystemSettingsService
+from app.services.user_activity import UserInactiveError, require_active_user
 from app.utils.timezone import SHANGHAI, utc_now, utc_now_naive
 from app.utils.crypto import decrypt_text, encrypt_text
 from app.utils.device import HYPERION_APP_VERSION
@@ -590,6 +592,10 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
     async def test_scheduler_execute_checkin_uses_delay_within_one_minute_and_still_notifies(self):
         service = SchedulerService()
+        async with self.session_factory() as session:
+            user = await self._create_user(session, "scheduled-active")
+            await session.commit()
+            user_id = user.id
         expected_summary = CheckinSummary(
             total=1,
             success=1,
@@ -614,15 +620,180 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
             mock_checkin = mock_checkin_cls.return_value
             mock_checkin.execute_for_user = AsyncMock(return_value=expected_summary)
 
-            await service._execute_checkin(42)
+            await service._execute_checkin(user_id)
 
         mock_uniform.assert_called_once_with(0, 60)
         mock_sleep.assert_awaited_once_with(12.5)
-        mock_checkin.execute_for_user.assert_awaited_once_with(42)
+        mock_checkin.execute_for_user.assert_awaited_once_with(user_id)
         mock_send_report.assert_awaited_once()
-        self.assertEqual(mock_send_report.await_args.args[0], 42)
+        self.assertEqual(mock_send_report.await_args.args[0], user_id)
         self.assertEqual(mock_send_report.await_args.args[1], expected_summary)
         self.assertEqual(mock_send_report.await_args.kwargs["source"], "scheduled_checkin")
+
+    async def _create_activity_fixture(self, *, enabled=True):
+        async with self.session_factory() as session:
+            admin = User(username="activity-admin", password_hash="x", role="admin", is_active=True)
+            user = await self._create_user(session, "activity-user")
+            config = TaskConfig(user_id=user.id, cron_expr="20 8 * * *", is_enabled=enabled)
+            session.add_all([admin, config])
+            await session.commit()
+            return admin, user, config
+
+    async def _disable_in_separate_session(self, user_id):
+        async with self.session_factory() as session:
+            user = await session.get(User, user_id)
+            user.is_active = False
+            await session.commit()
+
+    async def test_toggle_user_restores_only_original_enabled_schedule(self):
+        admin, user, config = await self._create_activity_fixture()
+        service = self.registration_scheduler
+        await service.update_user_schedule(user.id, config)
+        with patch("app.api.admin.scheduler_service", service):
+            async with self.session_factory() as session:
+                disabled = await toggle_user_active(user.id, admin=admin, db=session)
+                self.assertFalse(disabled["is_active"])
+                self.assertIsNone(service.scheduler.get_job(f"checkin_user_{user.id}"))
+                enabled = await toggle_user_active(user.id, admin=admin, db=session)
+                self.assertTrue(enabled["is_active"])
+                self.assertIsNotNone(service.scheduler.get_job(f"checkin_user_{user.id}"))
+                stored = await session.get(TaskConfig, config.id)
+                self.assertEqual(stored.cron_expr, "20 8 * * *")
+                self.assertTrue(stored.is_enabled)
+                stored.is_enabled = False
+                await session.commit()
+                await toggle_user_active(user.id, admin=admin, db=session)
+                await toggle_user_active(user.id, admin=admin, db=session)
+                self.assertIsNone(service.scheduler.get_job(f"checkin_user_{user.id}"))
+                self.assertFalse(stored.is_enabled)
+                self.assertEqual(stored.cron_expr, "20 8 * * *")
+
+    async def test_toggle_sync_failure_keeps_committed_user_state_and_exposes_error(self):
+        admin, user, config = await self._create_activity_fixture()
+        service = self.registration_scheduler
+        await service.update_user_schedule(user.id, config)
+        with patch("app.api.admin.scheduler_service", service), patch.object(
+            service.scheduler, "remove_job", side_effect=RuntimeError("remove failed"),
+        ):
+            async with self.session_factory() as session:
+                with self.assertRaises(HTTPException) as caught:
+                    await toggle_user_active(user.id, admin=admin, db=session)
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertIn("用户已禁用", caught.exception.detail)
+        self.assertIn("remove failed", service.get_user_schedule_status(user.id, enabled=True).scheduler_error)
+        async with self.session_factory() as session:
+            self.assertFalse((await session.get(User, user.id)).is_active)
+            self.assertTrue((await session.get(TaskConfig, config.id)).is_enabled)
+        runtime = await service.ensure_user_schedule(config, user_active=False)
+        self.assertFalse(runtime.job_registered)
+        self.assertIsNotNone(runtime.scheduler_error)
+
+    async def test_delayed_checkin_stops_after_disable_without_notification(self):
+        _, user, _ = await self._create_activity_fixture()
+
+        async def disable_during_delay(_):
+            await self._disable_in_separate_session(user.id)
+
+        with patch("app.services.scheduler.async_session", self.session_factory), patch(
+            "app.services.scheduler.asyncio.sleep", new=AsyncMock(side_effect=disable_during_delay),
+        ), patch("app.services.scheduler.CheckinService") as checkin, patch(
+            "app.services.notifier.notification_service.send_checkin_report", new_callable=AsyncMock,
+        ) as notify:
+            await self.registration_scheduler._execute_checkin(user.id)
+        checkin.return_value.execute_for_user.assert_not_called()
+        notify.assert_not_awaited()
+
+    async def test_inactive_guard_reads_new_commit_and_blocks_stale_config_requests(self):
+        _, user, _ = await self._create_activity_fixture()
+        service = self.registration_scheduler
+        async with self.session_factory() as session:
+            stale_user = await session.get(User, user.id)
+            await self._disable_in_separate_session(user.id)
+            self.assertTrue(stale_user.is_active)
+            with self.assertRaises(UserInactiveError):
+                await require_active_user(session, user.id)
+            with self.assertRaises(UserInactiveError):
+                await CheckinService(session).execute_for_user(user.id)
+            with patch("app.api.tasks.scheduler_service", service):
+                with self.assertRaises(UserInactiveError):
+                    await get_task_config(current_user=stale_user, db=session)
+                with self.assertRaises(UserInactiveError):
+                    await update_task_config(TaskConfigCreate(cron_expr="0 9 * * *", is_enabled=True),
+                                             current_user=stale_user, db=session)
+            self.assertIsNone(service.scheduler.get_job(f"checkin_user_{user.id}"))
+
+    async def test_batch_disable_preserves_completed_log_and_stops_next_role_and_account(self):
+        _, user, _ = await self._create_activity_fixture()
+        async with self.session_factory() as session:
+            for index in range(2):
+                account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
+                session.add(account)
+                await session.flush()
+                for role_index in range(2):
+                    session.add(GameRole(account_id=account.id, game_biz="hkrpg_cn",
+                                         game_uid=f"{index}{role_index}", region="prod_gf_cn", is_enabled=True))
+            await session.commit()
+            service = CheckinService(session)
+
+            async def complete_then_disable(account, role, *args):
+                await self._disable_in_separate_session(user.id)
+                return CheckinResult(account_id=account.id, game_role_id=role.id, status="success", message="ok")
+
+            with patch("app.services.checkin.decrypt_cookie", return_value="cookie"), patch.object(
+                service, "_ensure_device_state", new=AsyncMock(return_value=("id", "fp")),
+            ), patch.object(service, "_checkin_role", new=AsyncMock(side_effect=complete_then_disable)) as sign:
+                with self.assertRaises(UserInactiveError):
+                    await service.execute_for_user(user.id)
+            sign.assert_awaited_once()
+        async with self.session_factory() as session:
+            logs = (await session.execute(select(TaskLog))).scalars().all()
+            self.assertEqual(len(logs), 1)
+            self.assertEqual(logs[0].status, "success")
+
+    async def test_disable_during_info_delay_never_sends_sign_request(self):
+        _, user, _ = await self._create_activity_fixture()
+        async with self.session_factory() as session:
+            account = MihoyoAccount(user_id=user.id, cookie_encrypted="encrypted", cookie_status="valid")
+            session.add(account)
+            await session.flush()
+            role = GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="10001", region="prod_gf_cn")
+            session.add(role)
+            await session.commit()
+            service = CheckinService(session)
+            service._get_sign_info = AsyncMock(return_value={"is_sign": False})
+            service._ensure_monthly_rewards = AsyncMock(return_value=[])
+            async def disable():
+                await self._disable_in_separate_session(user.id)
+
+            service._sleep_between_info_and_sign = AsyncMock(side_effect=disable)
+            service._sleep_between_roles = AsyncMock()
+            service._do_sign = AsyncMock()
+            with self.assertRaises(UserInactiveError):
+                await service._checkin_role(account, role, "cookie", FakeClient(), ("id", "fp"))
+            service._do_sign.assert_not_awaited()
+
+    async def test_cookie_patrol_skips_disabled_users_and_rechecks_between_accounts(self):
+        _, user, _ = await self._create_activity_fixture()
+        async with self.session_factory() as session:
+            disabled = User(username="patrol-disabled", password_hash="x", is_active=False)
+            session.add(disabled)
+            await session.flush()
+            session.add_all([
+                MihoyoAccount(user_id=owner, cookie_encrypted="encrypted")
+                for owner in [disabled.id, user.id, user.id]
+            ])
+            await session.commit()
+
+        async def refresh(account):
+            self.assertEqual(account.user_id, user.id)
+            await self._disable_in_separate_session(user.id)
+
+        with patch("app.services.scheduler.async_session", self.session_factory), patch(
+            "app.services.scheduler.LoginStateService.refresh_account_login_state",
+            new=AsyncMock(side_effect=refresh),
+        ) as patrol:
+            await self.registration_scheduler._check_cookies()
+        patrol.assert_awaited_once()
 
     async def test_update_task_config_returns_scheduler_runtime_fields(self):
         async with await self._new_session() as session:

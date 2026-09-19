@@ -22,6 +22,7 @@ from app.services.checkin import CheckinService, SUPPORTED_CHECKIN_BIZ
 from app.services.notifier import notification_service
 from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, scheduler_service
 from app.services.task_config import get_or_create_task_config
+from app.services.user_activity import require_active_user
 from app.utils.timezone import get_shanghai_date, get_shanghai_day_utc_range
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ async def get_task_config(
 ):
     """获取配置，并尝试自愈本进程缺失的启用任务；失败通过 scheduler_error 返回"""
     async with scheduler_service.user_schedule_lock(current_user.id):
+        await require_active_user(db, current_user.id)
         config, _ = await get_or_create_task_config(
             db, current_user.id, auto_commit=True, for_update=True,
         )
@@ -76,6 +78,7 @@ async def update_task_config(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     async with scheduler_service.user_schedule_lock(user_id):
+        await require_active_user(db, user_id)
         snapshot = scheduler_service.snapshot_user_schedule(user_id)
         runtime_changed = False
         try:

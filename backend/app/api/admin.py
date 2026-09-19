@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
-from app.models.task_log import TaskLog
+from app.models.task_log import TaskConfig, TaskLog
 from app.schemas.system_setting import (
     AdminEmailSettingsResponse,
     AdminEmailSettingsUpdate,
@@ -31,6 +31,7 @@ from app.schemas.user import UserResponse
 from app.api.auth import require_admin
 from app.services.admin_broadcast import AdminBroadcastService
 from app.services.system_settings import SystemSettingsService
+from app.services.scheduler import scheduler_service
 from app.utils.crypto import encrypt_text
 
 router = APIRouter(prefix="/api/admin", tags=["管理员"])
@@ -56,14 +57,31 @@ async def toggle_user_active(
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="不能禁用自己的账号")
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    async with scheduler_service.user_schedule_lock(user_id):
+        result = await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
 
-    user.is_active = not user.is_active
-    await db.commit()
-    return {"message": f"用户已{'启用' if user.is_active else '禁用'}", "is_active": user.is_active}
+        config = (await db.execute(
+            select(TaskConfig).where(TaskConfig.user_id == user_id).with_for_update()
+            .execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        user.is_active = not user.is_active
+        is_active = user.is_active
+        await db.commit()
+        try:
+            await scheduler_service.sync_user_activity(user_id, config, user_active=is_active)
+        except Exception as exc:
+            # 已提交状态不得回滚成启用，也不能返回完全成功或让客户端自动重试切换
+            raise HTTPException(
+                status_code=503,
+                detail=f"用户已{'启用' if is_active else '禁用'}，但调度同步失败；请刷新用户列表，勿重复切换。管理员需检查调度日志并恢复运行态",
+            ) from exc
+    return {"message": f"用户已{'启用' if is_active else '禁用'}", "is_active": is_active}
 
 
 @router.get("/stats")

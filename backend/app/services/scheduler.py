@@ -25,6 +25,7 @@ from app.models.task_log import TaskConfig
 from app.services.checkin import CheckinService
 from app.services.login_state import LoginStateService
 from app.services.task_config import ensure_all_users_have_task_config
+from app.services.user_activity import UserInactiveError, is_user_active, require_active_user
 
 logger = logging.getLogger(__name__)
 
@@ -195,8 +196,11 @@ class SchedulerService:
 
             registered_count = 0
             for config in configs:
-                runtime = await self.ensure_user_schedule(config, user_active=True)
-                registered_count += int(runtime.job_registered)
+                async with self.user_schedule_lock(config.user_id):
+                    runtime = await self.ensure_user_schedule(
+                        config, user_active=await is_user_active(db, config.user_id),
+                    )
+                    registered_count += int(runtime.job_registered)
 
             logger.info("已注册 %s/%s 个用户的签到任务", registered_count, len(configs))
 
@@ -286,6 +290,22 @@ class SchedulerService:
                 scheduler_error=str(exc),
             )
 
+    async def sync_user_activity(
+        self, user_id: int, config: TaskConfig | None, *, user_active: bool,
+    ) -> None:
+        """用户状态提交后同步运行态，不改写个人配置；失败持续暴露至下次成功同步"""
+        try:
+            runtime_config = SimpleNamespace(
+                is_enabled=bool(user_active and config is not None and config.is_enabled),
+                cron_expr=config.cron_expr if config is not None else "",
+            )
+            await self.update_user_schedule(user_id, runtime_config)
+        except Exception as exc:
+            self._schedule_errors[user_id] = f"用户状态已保存，但调度同步失败: {exc}"
+            logger.exception("用户 %s 状态提交后调度同步失败", user_id)
+            raise
+        self.clear_user_schedule_error(user_id)
+
     def get_user_schedule_status(
         self,
         user_id: int,
@@ -315,7 +335,13 @@ class SchedulerService:
 
         async with async_session() as db:
             checkin_service = CheckinService(db)
-            summary = await checkin_service.execute_for_user(user_id)
+            try:
+                await require_active_user(db, user_id)
+                summary = await checkin_service.execute_for_user(user_id)
+                await require_active_user(db, user_id)
+            except UserInactiveError:
+                logger.info("用户 %s 已禁用或不存在，停止本轮签到，不发送成功报告", user_id)
+                return
 
             logger.info(
                 f"用户 {user_id} 签到完成: "
@@ -343,24 +369,30 @@ class SchedulerService:
 
         async with async_session() as db:
             result = await db.execute(
-                select(MihoyoAccount).where(MihoyoAccount.cookie_encrypted.is_not(None))
+                select(MihoyoAccount).join(User, User.id == MihoyoAccount.user_id).where(
+                    MihoyoAccount.cookie_encrypted.is_not(None), User.is_active.is_(True),
+                )
             )
             accounts = result.scalars().all()
 
             login_state_service = LoginStateService(db)
+            checked_count = 0
 
             for account_id in [account.id for account in accounts]:
                 try:
                     account = await db.get(MihoyoAccount, account_id)
                     if account is None:
                         continue
+                    if not await is_user_active(db, account.user_id):
+                        continue
                     await login_state_service.refresh_account_login_state(account)
+                    checked_count += 1
                 except HTTPException as exc:
                     if exc.status_code not in (404, 409):
                         raise
                     logger.info("巡检跳过账号: %s", exc.detail)
 
-            logger.info(f"网页登录态巡检完成，共处理 {len(accounts)} 个账号")
+            logger.info("网页登录态巡检完成，共处理 %s 个账号", checked_count)
 
     def stop(self):
         """停止调度器"""

@@ -44,6 +44,7 @@ from app.services.login_state import LoginStateService
 from app.services.account_operations import account_operation, load_current_account
 from app.services.account_role_sync import fetch_game_roles
 from app.services.system_settings import SystemSettingsService
+from app.services.user_activity import UserInactiveError, require_active_user
 from app.utils.crypto import decrypt_cookie
 from app.utils.device import (
     DEVICE_FP_URL,
@@ -215,6 +216,7 @@ class CheckinService:
         - 查询后短延迟只对“未签到 -> 立即签到”的链路生效
         - 角色间延迟需要覆盖成功、失败、异常等所有调用过 API 的分支
         """
+        await require_active_user(self.db, user_id)
         result = await self.db.execute(
             select(MihoyoAccount).where(
                 MihoyoAccount.user_id == user_id,
@@ -234,6 +236,7 @@ class CheckinService:
                 try:
                     async with account_operation(self.db, account_id):
                         account = await load_current_account(self.db, account_id)
+                        await require_active_user(self.db, user_id)
                         latest_today_logs = await self._load_today_latest_role_logs([account_id])
                         roles_result = await self.db.execute(
                             select(GameRole).where(
@@ -265,6 +268,7 @@ class CheckinService:
                             continue
 
                         if account.cookie_status != "valid":
+                            await require_active_user(self.db, user_id)
                             login_state = await login_state_service.refresh_account_login_state(account)
                             if login_state["cookie_status"] != "valid":
                                 for role in roles_to_execute:
@@ -306,9 +310,11 @@ class CheckinService:
                             continue
 
                         if device_state is None:
+                            await require_active_user(self.db, user_id)
                             device_state = await self._ensure_device_state(client)
 
                         for role in roles_to_execute:
+                            await require_active_user(self.db, user_id)
                             result = await self._checkin_role(account, role, cookie, client, device_state)
                             all_results.append(result)
                             self.db.add(
@@ -324,6 +330,8 @@ class CheckinService:
                                     reward_icon=result.reward_icon,
                                 )
                             )
+                            # 后续角色因禁用停止时，保留已经完成的真实结果
+                            await self.db.commit()
 
                         await self.db.commit()
                 except HTTPException as exc:
@@ -337,6 +345,7 @@ class CheckinService:
                         ))
                     logger.info("账号 %s 本轮跳过: %s", account_id, exc.detail)
 
+        await require_active_user(self.db, user_id)
         return CheckinSummary(
             total=len(all_results),
             success=sum(1 for item in all_results if item.status == "success"),
@@ -373,8 +382,10 @@ class CheckinService:
 
         called_api = False
         try:
+            await require_active_user(self.db, account.user_id)
             called_api = True
             info = await self._get_sign_info(client, cookie, config, role, device_state)
+            await require_active_user(self.db, account.user_id)
             awards = await self._ensure_monthly_rewards(client, cookie, config, role, device_state)
             query_total = info.get("total_sign_day")
             if query_total is not None:
@@ -401,6 +412,7 @@ class CheckinService:
 
             # 查询成功且确认“未签到”后再等待短延迟，避免把无意义等待扩散到失败分支。
             await self._sleep_between_info_and_sign()
+            await require_active_user(self.db, account.user_id)
             result = await self._do_sign(client, cookie, config, account, role, device_state)
             return self._with_reward(
                 result,
@@ -409,6 +421,8 @@ class CheckinService:
                 query_total=query_total,
             )
 
+        except UserInactiveError:
+            raise
         except CheckinApiError as exc:
             logger.warning("角色 %s 签到阶段失败: %s", role.game_uid, exc)
             return CheckinResult(
