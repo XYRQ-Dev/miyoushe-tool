@@ -99,7 +99,6 @@
               </el-avatar>
               <div class="user-copy">
                 <span class="user-name">{{ userStore.userInfo?.username }}</span>
-                <span class="user-role">{{ userStore.isAdmin ? '管理员' : '普通用户' }}</span>
               </div>
               <el-icon class="user-arrow"><ArrowDown /></el-icon>
             </button>
@@ -366,12 +365,6 @@ onBeforeUnmount(() => {
 .user-name {
   font-size: 13px;
   font-weight: 700;
-}
-
-.user-role {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-weight: 600;
 }
 
 .shell-content {

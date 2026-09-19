@@ -157,10 +157,6 @@
                 </el-button>
               </div>
             </el-form>
-            <p class="hint-text">
-              <el-icon><InfoFilled /></el-icon>
-              首个注册用户将自动开启管理员权限
-            </p>
           </el-tab-pane>
         </el-tabs>
       </section>
@@ -171,7 +167,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { User, Lock, Star, Monitor, Timer, InfoFilled, Ticket } from '@element-plus/icons-vue'
+import { User, Lock, Star, Monitor, Timer, Ticket } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '../stores/user'
 import { authApi } from '../api'
@@ -519,16 +515,6 @@ onMounted(loadRegisterOptions)
 .submit-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 16px 32px -6px rgba(37, 99, 235, 0.35);
-}
-
-.hint-text {
-  margin-top: 24px;
-  font-size: 13px;
-  color: var(--text-tertiary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
 }
 
 /* --- Responsive Adjustments --- */

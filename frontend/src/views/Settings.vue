@@ -102,29 +102,6 @@
       </el-form>
     </el-card>
 
-    <el-card class="settings-card panel-card" shadow="never">
-      <template #header>
-        <div class="section-head">
-          <div>
-            <div class="section-title">外观设置</div>
-            <div class="section-desc">选择你习惯的界面模式，设置会立即生效。</div>
-          </div>
-          <el-icon class="section-icon"><Sunny /></el-icon>
-        </div>
-      </template>
-
-      <el-form label-width="120px">
-        <el-form-item label="深色模式">
-          <el-switch
-            :model-value="userStore.darkMode"
-            @change="userStore.setDarkMode"
-            active-text="开启"
-            inactive-text="关闭"
-          />
-        </el-form-item>
-      </el-form>
-    </el-card>
-
     <el-card v-if="userStore.isAdmin" class="settings-card panel-card" shadow="never">
       <template #header>
         <div class="section-head">
@@ -229,7 +206,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { User, Clock, Sunny, Message, Ticket } from '@element-plus/icons-vue'
+import { User, Clock, Message, Ticket } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '../stores/user'
 import { authApi, taskApi, adminApi } from '../api'
