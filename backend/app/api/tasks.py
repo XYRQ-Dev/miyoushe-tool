@@ -51,11 +51,10 @@ async def get_task_config(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取当前用户的签到调度配置"""
+    """获取配置，并尝试自愈本进程缺失的启用任务；失败通过 scheduler_error 返回"""
     config, _ = await get_or_create_task_config(db, current_user.id, auto_commit=True)
-    runtime = scheduler_service.get_user_schedule_status(
-        current_user.id,
-        enabled=config.is_enabled,
+    runtime = await scheduler_service.ensure_user_schedule(
+        config, user_active=current_user.is_active,
     )
     return _build_task_config_response(config, runtime)
 

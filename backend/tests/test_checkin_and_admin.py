@@ -23,7 +23,7 @@ from app.api.admin import (
 )
 from app.api.accounts import list_accounts, refresh_login_state
 from app.api.logs import get_sign_calendar, list_logs
-from app.api.tasks import execute_checkin, get_today_status, update_task_config
+from app.api.tasks import execute_checkin, get_task_config, get_today_status, update_task_config
 from app.models.account import GameRole, MihoyoAccount
 from app.models.admin_operation_log import AdminOperationLog
 from app.models.system_setting import SystemSetting
@@ -90,8 +90,16 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         if hasattr(SystemSettingsService, "_storage_ready_sync_engines"):
             SystemSettingsService._storage_ready_sync_engines.clear()
         await super().asyncSetUp()
+        # 注册用例使用独立且暂停的调度器，避免全局任务泄漏或触发真实签到
+        self.registration_scheduler = SchedulerService()
+        self.registration_scheduler.scheduler.start(paused=True)
+        self.registration_scheduler._started = True
+        registration_patch = patch("app.api.auth.scheduler_service", self.registration_scheduler)
+        registration_patch.start()
+        self.addCleanup(registration_patch.stop)
 
     async def asyncTearDown(self):
+        self.registration_scheduler.stop()
         if hasattr(SystemSettingsService, "_storage_ready_sync_engines"):
             SystemSettingsService._storage_ready_sync_engines.clear()
         await super().asyncTearDown()
@@ -119,6 +127,105 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
 
         self.assertEqual(config.cron_expr, "0 6 * * *")
         self.assertTrue(config.is_enabled)
+
+        runtime = self.registration_scheduler.get_user_schedule_status(user.id, enabled=True)
+        self.assertTrue(runtime.job_registered)
+        self.assertIsNotNone(runtime.next_run_time)
+        job = self.registration_scheduler.scheduler.get_job(runtime.job_id)
+        self.assertEqual(job.trigger.timezone, SHANGHAI)
+
+    async def test_register_commits_user_and_config_before_registering_schedule(self):
+        service = self.registration_scheduler
+        original_add = service._add_job
+
+        async def verify_committed(user_id, config):
+            async with await self._new_session() as verify_session:
+                self.assertIsNotNone(await verify_session.get(User, user_id))
+                stored = (await verify_session.execute(
+                    select(TaskConfig).where(TaskConfig.user_id == user_id)
+                )).scalar_one()
+                self.assertEqual(stored.cron_expr, config.cron_expr)
+            return await original_add(user_id, config)
+
+        async with await self._new_session() as session:
+            with patch.object(service, "_add_job", side_effect=verify_committed) as add:
+                await register(UserCreate(username="committed-schedule", password="password123"), db=session)
+            add.assert_awaited_once()
+
+    async def test_register_commit_failure_does_not_register_schedule(self):
+        async with await self._new_session() as session:
+            with patch.object(session, "commit", new=AsyncMock(side_effect=RuntimeError("commit failed"))), patch.object(
+                self.registration_scheduler, "ensure_user_schedule", new=AsyncMock(),
+            ) as ensure:
+                with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                    await register(UserCreate(username="failed-commit", password="password123"), db=session)
+                ensure.assert_not_awaited()
+            await session.rollback()
+        async with await self._new_session() as session:
+            self.assertEqual((await session.execute(select(func.count(User.id)))).scalar_one(), 0)
+            self.assertEqual((await session.execute(select(func.count(TaskConfig.id)))).scalar_one(), 0)
+
+    async def test_register_scheduler_failure_succeeds_and_get_retries(self):
+        service = self.registration_scheduler
+        async with await self._new_session() as session:
+            with patch.object(service.scheduler, "add_job", side_effect=RuntimeError("scheduler unavailable")):
+                registered = await register(
+                    UserCreate(username="retry-schedule", password="password123"), db=session,
+                )
+                user = await session.get(User, registered.id)
+                with patch("app.api.tasks.scheduler_service", service):
+                    failed = await get_task_config(current_user=user, db=session)
+                self.assertFalse(failed.job_registered)
+                self.assertIsNone(failed.next_run_time)
+                self.assertIn("scheduler unavailable", failed.scheduler_error)
+            with patch("app.api.tasks.scheduler_service", service):
+                recovered = await get_task_config(current_user=user, db=session)
+                job = service.scheduler.get_job(recovered.job_id)
+                again = await get_task_config(current_user=user, db=session)
+            self.assertTrue(recovered.job_registered)
+            self.assertIsNone(recovered.scheduler_error)
+            self.assertEqual(again.next_run_time, recovered.next_run_time)
+            self.assertIs(service.scheduler.get_job(recovered.job_id), job)
+            self.assertEqual(len(service.scheduler.get_jobs()), 1)
+
+    async def test_get_task_config_creates_historical_config_and_recovers_job(self):
+        async with await self._new_session() as session:
+            user = await self._create_user(session, "historical-schedule")
+            await session.commit()
+            with patch("app.api.tasks.scheduler_service", self.registration_scheduler):
+                response = await get_task_config(current_user=user, db=session)
+            self.assertTrue(response.job_registered)
+            self.assertEqual(response.cron_expr, "0 6 * * *")
+            self.assertIsNotNone(response.next_run_time)
+        async with await self._new_session() as session:
+            self.assertEqual((await session.execute(select(func.count(TaskConfig.id)))).scalar_one(), 1)
+
+    async def test_get_task_config_preserves_disabled_and_custom_config(self):
+        async with await self._new_session() as session:
+            user = await self._create_user(session, "disabled-schedule")
+            config = TaskConfig(user_id=user.id, cron_expr="15 9 * * *", is_enabled=False)
+            session.add(config)
+            await session.commit()
+            with patch("app.api.tasks.scheduler_service", self.registration_scheduler):
+                disabled = await get_task_config(current_user=user, db=session)
+                self.assertFalse(disabled.job_registered)
+                self.assertEqual(disabled.cron_expr, "15 9 * * *")
+                config.is_enabled = True
+                await session.commit()
+                enabled = await get_task_config(current_user=user, db=session)
+            self.assertTrue(enabled.job_registered)
+            self.assertEqual(enabled.cron_expr, "15 9 * * *")
+
+    async def test_ensure_schedule_skips_inactive_user_and_reports_stopped_scheduler(self):
+        config = TaskConfig(user_id=7, cron_expr="0 6 * * *", is_enabled=True)
+        service = SchedulerService()
+        inactive = await service.ensure_user_schedule(config, user_active=False)
+        self.assertFalse(inactive.job_registered)
+        self.assertEqual(service.scheduler.get_jobs(), [])
+        stopped = await service.ensure_user_schedule(config, user_active=True)
+        self.assertFalse(stopped.job_registered)
+        self.assertIsNone(stopped.next_run_time)
+        self.assertIn("尚未启动", stopped.scheduler_error)
 
     async def test_register_returns_visible_menu_keys_consistent_with_get_me(self):
         async with await self._new_session() as session:
@@ -262,6 +369,21 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         finally:
             service.stop()
 
+    async def test_scheduler_load_skips_inactive_users_without_changing_config(self):
+        async with await self._new_session() as session:
+            user = await self._create_user(session, "inactive-schedule")
+            user.is_active = False
+            session.add(TaskConfig(user_id=user.id, cron_expr="20 8 * * *", is_enabled=True))
+            await session.commit()
+        service = self.registration_scheduler
+        with patch("app.services.scheduler.async_session", self.session_factory):
+            await service._load_all_schedules()
+        self.assertEqual(service.scheduler.get_jobs(), [])
+        async with await self._new_session() as session:
+            config = (await session.execute(select(TaskConfig))).scalar_one()
+            self.assertTrue(config.is_enabled)
+            self.assertEqual(config.cron_expr, "20 8 * * *")
+
     async def test_scheduler_update_user_schedule_registers_job_and_returns_next_run_time(self):
         service = SchedulerService()
         service.scheduler.start()
@@ -282,10 +404,16 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         service = SchedulerService()
         service.scheduler.start()
         try:
-            config = TaskConfig(user_id=8, cron_expr="bad cron", is_enabled=True)
+            config = TaskConfig(user_id=8, cron_expr="0 6 * * *", is_enabled=True)
+            await service.update_user_schedule(8, config)
+            old_job = service.scheduler.get_job("checkin_user_8")
+            old_trigger = old_job.trigger
+            config.cron_expr = "bad cron"
 
             with self.assertRaises(ScheduleRegistrationError) as ctx:
                 await service.update_user_schedule(8, config)
+            self.assertIs(service.scheduler.get_job("checkin_user_8"), old_job)
+            self.assertIs(old_job.trigger, old_trigger)
         finally:
             service.stop()
 

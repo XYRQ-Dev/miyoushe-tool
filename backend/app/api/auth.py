@@ -17,8 +17,8 @@ from passlib.context import CryptContext
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
-from app.services.task_config import DEFAULT_TASK_CRON_EXPR
-from app.models.task_log import TaskConfig
+from app.services.task_config import get_or_create_task_config
+from app.services.scheduler import scheduler_service
 from app.services.menu_visibility import resolve_visible_menu_keys
 from app.services.system_settings import SystemSettingsService
 from app.schemas.system_setting import RegisterOptionsResponse
@@ -129,17 +129,10 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.flush()
 
-    # 自动签到当前产品语义是“默认开启”。
-    # 若注册时不立即落这条配置，新用户只有在访问一次设置页后才会真正进入调度器，
-    # 这会造成“保存账号了但自动签到始终不触发”的黑盒体验。
-    db.add(
-        TaskConfig(
-            user_id=user.id,
-            cron_expr=DEFAULT_TASK_CRON_EXPR,
-            is_enabled=True,
-        )
-    )
+    config, _ = await get_or_create_task_config(db, user.id)
     await db.commit()
+    # 用户与默认配置提交后才能注册任务；运行态失败不回滚注册，读取配置时可重试
+    await scheduler_service.ensure_user_schedule(config, user_active=user.is_active)
     await db.refresh(user)
     return await build_user_response(user=user, db=db)
 

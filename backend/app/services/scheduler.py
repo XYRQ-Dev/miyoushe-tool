@@ -78,9 +78,9 @@ class SchedulerService:
         job = self.scheduler.get_job(job_id)
         return ScheduleRegistrationResult(
             enabled=True,
-            job_registered=job is not None,
+            job_registered=job is not None and self.scheduler.running,
             job_id=job_id,
-            next_run_time=job.next_run_time if job else None,
+            next_run_time=getattr(job, "next_run_time", None) if self.scheduler.running else None,
             scheduler_error=scheduler_error,
         )
 
@@ -133,17 +133,18 @@ class SchedulerService:
                 logger.info("已为 %s 个历史用户补建默认签到调度配置", created_count)
 
             result = await db.execute(
-                select(TaskConfig).where(TaskConfig.is_enabled == True)
+                select(TaskConfig).join(User, User.id == TaskConfig.user_id).where(
+                    TaskConfig.is_enabled == True, User.is_active == True,
+                )
             )
             configs = result.scalars().all()
 
+            registered_count = 0
             for config in configs:
-                try:
-                    await self._add_job(config.user_id, config)
-                except ScheduleRegistrationError as exc:
-                    logger.error("加载用户 %s 的签到任务失败: %s", config.user_id, exc)
+                runtime = await self.ensure_user_schedule(config, user_active=True)
+                registered_count += int(runtime.job_registered)
 
-            logger.info(f"已加载 {len(configs)} 个用户的调度配置")
+            logger.info("已注册 %s/%s 个用户的签到任务", registered_count, len(configs))
 
     async def _add_job(self, user_id: int, config: TaskConfig) -> ScheduleRegistrationResult:
         """为指定用户添加签到定时任务"""
@@ -187,15 +188,40 @@ class SchedulerService:
         """更新用户的调度配置"""
         job_id = self._build_job_id(user_id)
 
-        # 先移除旧任务
-        if self.scheduler.get_job(job_id):
-            self.scheduler.remove_job(job_id)
-
+        # 启用时先校验再按固定 ID 替换，不能提前删除仍有效的旧任务
         if config.is_enabled:
             return await self._add_job(user_id, config)
 
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+
         logger.info(f"用户 {user_id} 的签到任务已禁用")
         return self._build_result(user_id=user_id, enabled=False)
+
+    async def ensure_user_schedule(
+        self, config: TaskConfig, *, user_active: bool,
+    ) -> ScheduleRegistrationResult:
+        """仅为已提交的启用配置补注册缺失任务；失败返回运行态，供调用方重试"""
+        enabled = bool(config.is_enabled and user_active)
+        try:
+            if not enabled:
+                return self._build_result(user_id=config.user_id, enabled=False)
+            if not self.scheduler.running:
+                raise ScheduleRegistrationError("任务调度器尚未启动", status_code=503)
+            runtime = self._build_result(user_id=config.user_id, enabled=True)
+            if runtime.job_registered:
+                return runtime
+            # 检查到注册之间没有异步 I/O，重复调用保留已有任务的下次执行时间
+            return await self._add_job(config.user_id, config)
+        except Exception as exc:
+            logger.exception("恢复用户 %s 的签到任务失败", config.user_id)
+            return ScheduleRegistrationResult(
+                enabled=enabled,
+                job_registered=False,
+                job_id=self._build_job_id(config.user_id),
+                next_run_time=None,
+                scheduler_error=str(exc),
+            )
 
     def get_user_schedule_status(
         self,

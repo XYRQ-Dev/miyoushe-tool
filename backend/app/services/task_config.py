@@ -24,7 +24,7 @@ async def get_or_create_task_config(
     *,
     auto_commit: bool = False,
 ) -> tuple[TaskConfig, bool]:
-    """获取用户调度配置；若不存在则补建默认配置。"""
+    """获取或补建默认配置；调用方须在提交后通过调度服务恢复运行任务"""
     result = await db.execute(select(TaskConfig).where(TaskConfig.user_id == user_id))
     config = result.scalar_one_or_none()
     if config is not None:
