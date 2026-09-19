@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <h3>用户信息列表</h3>
-            <p>查看用户资料、通知设置和账号启用状态。</p>
+            <p>查看用户资料、通知设置，管理账号启用状态或永久删除用户。</p>
           </div>
           <div class="header-actions">
             <el-button type="primary" @click="openBroadcastDialog">
@@ -61,16 +61,26 @@
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" align="center">
+        <el-table-column label="操作" width="180" align="center">
           <template #default="{ row }">
-            <el-button
-              v-if="row.id !== userStore.userInfo?.id"
-              size="small"
-              :type="row.is_active ? 'danger' : 'success'"
-              @click="toggleUser(row)"
-            >
-              {{ row.is_active ? '禁用' : '启用' }}
-            </el-button>
+            <div v-if="row.id !== userStore.userInfo?.id" class="user-actions">
+              <el-button
+                size="small"
+                :type="row.is_active ? 'danger' : 'success'"
+                :disabled="deletingUserId === row.id"
+                @click="toggleUser(row)"
+              >
+                {{ row.is_active ? '禁用' : '启用' }}
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                plain
+                :loading="deletingUserId === row.id"
+                :disabled="deletingUserId !== null && deletingUserId !== row.id"
+                @click="deleteUser(row)"
+              >删除</el-button>
+            </div>
             <span v-else class="self-tip">当前账号</span>
           </template>
         </el-table-column>
@@ -149,7 +159,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '../api'
 import { useUserStore } from '../stores/user'
 import { formatDateTime } from '../utils/datetime'
@@ -183,6 +193,7 @@ type BroadcastResult = {
 const userStore = useUserStore()
 const users = ref<AdminUserRow[]>([])
 const loading = ref(false)
+const deletingUserId = ref<number | null>(null)
 const broadcastDialogVisible = ref(false)
 const broadcastSending = ref(false)
 const broadcastResult = ref<BroadcastResult | null>(null)
@@ -207,6 +218,10 @@ async function loadUsers() {
   try {
     const { data } = await adminApi.listUsers()
     users.value = data
+    if (broadcastResult.value) {
+      const userIds = new Set(users.value.map((user) => user.id))
+      broadcastResult.value.failures = broadcastResult.value.failures.filter((failure) => userIds.has(failure.user_id))
+    }
   } finally {
     loading.value = false
   }
@@ -219,6 +234,38 @@ async function toggleUser(user: AdminUserRow) {
     await loadUsers()
   } catch (e) {
     // 错误已在拦截器中处理
+  }
+}
+
+async function deleteUser(user: AdminUserRow) {
+  if (deletingUserId.value !== null) return
+  deletingUserId.value = user.id
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `确定永久删除用户「${user.username}」吗？将同时删除其绑定账号、登录凭据、游戏角色、签到记录和任务配置，无法恢复。`,
+        '永久删除用户',
+        {
+          confirmButtonText: '永久删除',
+          cancelButtonText: '取消',
+          confirmButtonClass: 'el-button--danger',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+    const { data } = await adminApi.deleteUser(user.id)
+    users.value = users.value.filter((item) => item.id !== user.id)
+    if (broadcastResult.value) {
+      broadcastResult.value.failures = broadcastResult.value.failures.filter((failure) => failure.user_id !== user.id)
+    }
+    ElMessage.success(data.message)
+    await loadUsers()
+  } catch {
+    // 接口错误由拦截器展示，保留失败行以便再次点击删除补做运行态清理
+  } finally {
+    deletingUserId.value = null
   }
 }
 
@@ -256,6 +303,8 @@ async function submitBroadcast() {
       body: broadcastForm.body,
     })
     broadcastResult.value = data
+    const userIds = new Set(users.value.map((user) => user.id))
+    broadcastResult.value!.failures = data.failures.filter((failure: BroadcastFailure) => userIds.has(failure.user_id))
     ElMessage.success(`群发完成，成功 ${data.sent_count} 人`)
   } finally {
     broadcastSending.value = false
@@ -304,6 +353,17 @@ onMounted(loadUsers)
 .self-tip {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.user-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.user-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .compact-text {

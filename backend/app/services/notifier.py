@@ -29,6 +29,8 @@ from app.config import settings
 from app.models.account import MihoyoAccount
 from app.models.user import User
 from app.services.system_settings import SystemSettingsService
+from app.services.user_activity import is_user_active
+from app.services.user_operations import user_operation
 from app.utils.crypto import decrypt_text
 from app.schemas.task_log import CheckinSummary
 from app.services.checkin_rewards import format_reward_text
@@ -384,6 +386,23 @@ class NotificationService:
         db: AsyncSession,
         source: str = "unknown",
     ):
+        with user_operation(user_id):
+            if not await is_user_active(db, user_id):
+                return
+            return await self._send_checkin_report(user_id, summary, db, source)
+
+    def clear_user_notifications(self, user_id: int):
+        for key in list(self._recent_notifications):
+            if key[0] == user_id:
+                self._recent_notifications.pop(key, None)
+
+    async def _send_checkin_report(
+        self,
+        user_id: int,
+        summary: CheckinSummary,
+        db: AsyncSession,
+        source: str = "unknown",
+    ):
         """
         发送签到报告邮件
         根据用户设置决定是否发送：
@@ -449,6 +468,17 @@ class NotificationService:
             )
 
     async def send_reauth_required_notification(
+        self,
+        user_id: int,
+        account: MihoyoAccount,
+        db: AsyncSession,
+    ) -> bool:
+        with user_operation(user_id):
+            if not await is_user_active(db, user_id):
+                return False
+            return await self._send_reauth_required_notification(user_id, account, db)
+
+    async def _send_reauth_required_notification(
         self,
         user_id: int,
         account: MihoyoAccount,

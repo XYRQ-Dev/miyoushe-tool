@@ -121,6 +121,7 @@ export const logApi = {
 export const adminApi = {
   listUsers: () => api.get('/admin/users'),
   toggleUser: (id: number) => api.put(`/admin/users/${id}/toggle-active`),
+  deleteUser: (id: number) => api.delete<{ message: string; deleted: boolean }>(`/admin/users/${id}`),
   getStats: () => api.get('/admin/stats'),
   getMenuVisibility: () => api.get('/admin/menu-visibility'),
   updateMenuVisibility: (data: {

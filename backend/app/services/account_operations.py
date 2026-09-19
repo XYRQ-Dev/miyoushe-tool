@@ -8,10 +8,21 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import MihoyoAccount
+from app.services.user_operations import user_operation
 
 
 @asynccontextmanager
 async def account_operation(db: AsyncSession, account_id: int):
+    user_id = await db.scalar(select(MihoyoAccount.user_id).where(MihoyoAccount.id == account_id))
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    with user_operation(user_id):
+        async with _account_operation(db, account_id):
+            yield
+
+
+@asynccontextmanager
+async def _account_operation(db: AsyncSession, account_id: int):
     # 使用独立连接持有 MySQL 命名锁，避免签到或修复中的 commit 提前释放互斥
     # 按 schema 和账号隔离，名称散列为 64 字符；同一任务内的签到前置修复可重入
     held = db.info.setdefault("account_operation_locks", {})

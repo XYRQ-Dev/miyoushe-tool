@@ -16,6 +16,8 @@ from app.database import get_db
 from app.models.user import User
 from app.models.account import MihoyoAccount, GameRole
 from app.models.task_log import TaskLog
+from app.services.user_activity import require_active_user
+from app.services.user_operations import user_operation
 from app.services.account_operations import account_operation, load_current_account
 from app.schemas.account import AccountResponse, AccountListResponse, LoginStateResponse, QrLoginStartResponse
 from app.api.auth import get_current_user
@@ -132,12 +134,17 @@ async def list_accounts(
 
 
 @router.post("/qr-login", response_model=QrLoginStartResponse)
-async def start_qr_login(current_user: User = Depends(get_current_user)):
+async def start_qr_login(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     发起官方 Passport 扫码登录会话。
     返回会话 ID 和短期一次性凭证，凭证仅通过 WebSocket 首帧提交。
     """
-    return QrLoginStartResponse(**passport_login_manager.issue_session(current_user.id))
+    with user_operation(current_user.id):
+        await require_active_user(db, current_user.id)
+        return QrLoginStartResponse(**passport_login_manager.issue_session(current_user.id))
 
 
 @router.post("/sms-login/captcha")
@@ -217,16 +224,18 @@ async def refresh_cookie(
     重新发起指定账号的高权限扫码登录。
     返回新的 session_id，与 qr-login 流程一致。
     """
-    result = await db.execute(select(MihoyoAccount).where(
-        MihoyoAccount.id == account_id,
-        MihoyoAccount.user_id == current_user.id,
-    ))
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="账号不存在")
-    return QrLoginStartResponse(
-        **passport_login_manager.issue_session(current_user.id, account_id),
-        message="请重新扫码以更新高权限登录态",
-    )
+    with user_operation(current_user.id):
+        await require_active_user(db, current_user.id)
+        result = await db.execute(select(MihoyoAccount).where(
+            MihoyoAccount.id == account_id,
+            MihoyoAccount.user_id == current_user.id,
+        ))
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        return QrLoginStartResponse(
+            **passport_login_manager.issue_session(current_user.id, account_id),
+            message="请重新扫码以更新高权限登录态",
+        )
 
 
 @router.post("/{account_id}/refresh-login-state", response_model=LoginStateResponse)

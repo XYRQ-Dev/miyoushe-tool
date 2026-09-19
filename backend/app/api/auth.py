@@ -18,6 +18,8 @@ from passlib.context import CryptContext
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
+from app.services.user_operations import user_operation
+from app.services.user_activity import require_active_user
 from app.services.task_config import get_or_create_task_config
 from app.services.scheduler import scheduler_service
 from app.services.menu_visibility import resolve_visible_menu_keys
@@ -153,12 +155,13 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.flush()
 
-    config, _ = await get_or_create_task_config(db, user.id)
-    await db.commit()
-    # 用户与默认配置提交后才能注册任务；运行态失败不回滚注册，读取配置时可重试
-    await scheduler_service.ensure_user_schedule(config, user_active=user.is_active)
-    await db.refresh(user)
-    return await build_user_response(user=user, db=db)
+    with user_operation(user.id):
+        config, _ = await get_or_create_task_config(db, user.id)
+        await db.commit()
+        # 用户与默认配置提交后才能注册任务；运行态失败不回滚注册，读取配置时可重试
+        await scheduler_service.ensure_user_schedule(config, user_active=user.is_active)
+        await db.refresh(user)
+        return await build_user_response(user=user, db=db)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -191,16 +194,18 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     """更新当前用户设置（邮箱、通知偏好）"""
-    if data.email is not None:
-        current_user.email = data.email
-    if data.email_notify is not None:
-        current_user.email_notify = data.email_notify
-    if data.notify_on is not None:
-        current_user.notify_on = data.notify_on
+    with user_operation(current_user.id):
+        await require_active_user(db, current_user.id)
+        if data.email is not None:
+            current_user.email = data.email
+        if data.email_notify is not None:
+            current_user.email_notify = data.email_notify
+        if data.notify_on is not None:
+            current_user.notify_on = data.notify_on
 
-    await db.commit()
-    await db.refresh(current_user)
-    return await build_user_response(user=current_user, db=db)
+        await db.commit()
+        await db.refresh(current_user)
+        return await build_user_response(user=current_user, db=db)
 
 
 @router.post("/refresh", response_model=TokenResponse)

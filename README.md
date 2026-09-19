@@ -1,334 +1,329 @@
 # 米游社自动签到
 
-自托管的米游社账号管理与签到平台。使用官方 `Passport / HoyoPlay` 高权限登录绑定账号，支持手动签到、定时签到、登录态校验与邮件通知。
+自托管的米游社账号管理与签到平台，在一个 Web 界面中完成账号绑定、手动签到、定时任务和邮件通知。
 
-> [!IMPORTANT]
-> 本项目只适配**米游社国服官服**签到，不是米哈游官方产品。Cookie、根凭据等敏感数据加密后保存在你自己的 MySQL 中，请自行评估部署风险。
+后端基于 FastAPI，前端基于 Vue 3，数据存储于 MySQL，支持 Docker Compose 部署。通过官方 Passport / HoyoPlay 二维码获取登录凭据，并在工作 Cookie 失效时尝试自动修复。
+
+> [!NOTE]
+> 本项目为非官方工具，当前适配米游社国服，具体游戏与渠道见下表。签到结果受上游接口、账号状态与风控影响。
 
 ## 目录
 
-- [功能](#功能)
-- [技术栈](#技术栈)
-- [支持范围](#支持范围)
+- [主要功能](#主要功能)
+- [支持的游戏](#支持的游戏)
 - [快速开始](#快速开始)
-- [配置](#配置)
-- [使用说明](#使用说明)
-- [项目结构](#项目结构)
+- [配置说明](#配置说明)
+- [使用指南](#使用指南)
 - [本地开发](#本地开发)
-- [测试](#测试)
-- [故障排查](#故障排查)
-- [贡献指南](#贡献指南)
-- [相关文档](#相关文档)
+- [项目结构](#项目结构)
+- [常见问题](#常见问题)
+- [反馈与贡献](#反馈与贡献)
+- [许可证](#许可证)
 
-## 功能
+## 主要功能
 
-- **Passport 扫码登录**：通过官方二维码绑定或升级米游社账号；登录态走 WebSocket 推送
-- **登录态自愈**：工作 Cookie 失效时优先用根凭据重建；根凭据也失效后才要求重新扫码
-- **签到**：原神、崩坏：星穹铁道、崩坏 3、绝区零的国服官服角色；命中风控会单独标记，需稍后重试或前往米游社补签
-- **调度**：默认每天东八区 `06:00` 自动签到；用户可在设置页改 Cron
-- **日志**：分页查询，支持游戏、状态、日期筛选，以及最近 7 天日历统计
-- **奖励日历**：仪表盘展示当月奖励和今日领取物品；漏签按本平台东八区记录标记
-- **通知**：系统 SMTP + 用户通知邮箱两层配置；手动签到与定时签到共用同一套策略
-- **后台**：用户启停、注册邀请码、菜单显隐、公告邮件群发
-- **外观**：浅色 / 深色模式，仅保存在浏览器本地
+- **账号管理**：扫码绑定多个米游社账号，同步游戏角色，校验登录态，升级旧登录凭据
+- **自动签到**：支持手动执行与 Cron 定时任务，默认每天北京时间 `06:00` 签到，并随机错峰执行
+- **登录态维护**：区分根凭据与工作 Cookie，优先自动修复 Cookie，无法恢复时提示重新登录
+- **签到记录**：按游戏、状态、日期筛选日志，查看近期签到统计、当月奖励日历和今日奖励
+- **邮件通知**：支持系统 SMTP、个人收件邮箱，以及每次通知或仅失败时通知的策略
+- **后台管理**：用户启停与永久删除、注册邀请码、菜单显隐、公告邮件群发
+- **界面主题**：支持浅色与深色模式，主题偏好保存在当前浏览器
 
-## 技术栈
+## 支持的游戏
 
-| 层 | 技术 |
-| --- | --- |
-| 后端 | Python 3.11+（本机建议 3.13）、FastAPI、SQLAlchemy Async、APScheduler、Playwright |
-| 前端 | Vue 3、TypeScript、Vite、Element Plus、Pinia |
-| 数据 | MySQL 8.4 |
-| 部署 | Docker Compose（Nginx + Uvicorn + MySQL） |
+当前代码配置了以下签到渠道；表中列出的是适配范围，不代表上游接口始终可用。
 
-## 支持范围
+| 游戏 | 渠道 | `game_biz` |
+| --- | --- | --- |
+| 原神 | 国服官服、B 服 | `hk4e_cn`、`hk4e_bilibili` |
+| 崩坏：星穹铁道 | 国服官服、B 服 | `hkrpg_cn`、`hkrpg_bilibili` |
+| 崩坏 3 | 国服官服 | `bh3_cn` |
+| 绝区零 | 国服官服 | `nap_cn` |
 
-当前已验证的 `game_biz`：
-
-| 游戏 | `game_biz` |
-| --- | --- |
-| 原神 | `hk4e_cn`、`hk4e_bilibili` |
-| 崩坏：星穹铁道 | `hkrpg_cn`、`hkrpg_bilibili` |
-| 崩坏 3 | `bh3_cn` |
-| 绝区零 | `nap_cn` |
-
-未适配的角色会在账号卡片上标记为「签到未适配」，不会进入签到流程。例如崩坏 3 B 服、绝区零国际服，以及其他尚未验证的 `game_biz`。
+其他渠道及国际服不在当前适配范围内。未适配角色会显示「签到未适配」，不会进入签到流程。
 
 ## 快速开始
 
-### 使用 Docker Compose（推荐）
+### 环境要求
 
-需要已安装 [Docker](https://docs.docker.com/get-docker/) 与 Docker Compose。
+- Docker Engine 或 Docker Desktop，以及 Docker Compose v2
+- 可用的宿主机端口：`80`、`8000`、`3306`
+- 能够访问镜像源、依赖源和米哈游相关服务的网络
+
+以下命令使用 PowerShell，在仓库根目录执行。请先克隆仓库或下载并解压源码。
+
+### 1. 准备配置
 
 ```powershell
-copy .env.example .env
-# 编辑 .env：至少修改 SECRET_KEY、ENCRYPTION_KEY、MySQL 密码
+Copy-Item .env.example .env
+```
+
+编辑根目录 `.env`，至少替换以下配置中的占位值：
+
+```dotenv
+SECRET_KEY=<独立的强随机字符串>
+ENCRYPTION_KEY=<另一个独立的强随机字符串>
+MYSQL_DATABASE=miyoushe
+MYSQL_USER=miyoushe
+MYSQL_PASSWORD=<数据库用户密码>
+MYSQL_ROOT_PASSWORD=<数据库管理员密码>
+```
+
+使用内置 MySQL 时，不需要设置 `DATABASE_URL`，Compose 会使用 `mysql:3306` 作为数据库地址。暂不使用邮件通知时，将示例中的 `SMTP_HOST`、`SMTP_USER`、`SMTP_PASSWORD` 留空。
+
+> [!IMPORTANT]
+> 请长期保存 `ENCRYPTION_KEY`，并与数据库一同备份。更换或丢失该密钥会导致已有根凭据、Cookie 和 SMTP 密码无法解密。`SECRET_KEY` 用于 JWT 签名，更换后已有登录令牌会失效。
+
+### 2. 构建并启动
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+Compose 会启动 MySQL、后端和 Nginx 前端。首次构建需要下载依赖与浏览器组件。
+
+### 3. 打开平台
+
+| 入口 | 默认地址或端口 |
+| --- | --- |
+| Web 界面 | [http://localhost](http://localhost) |
+| 后端 API 文档 | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| 健康检查 | [http://localhost:8000/api/health](http://localhost:8000/api/health) |
+| MySQL | 宿主机 `3306` 端口 |
+
+注册平台账号后，在「账号管理」绑定米游社账号。**第一个注册用户自动成为管理员**，请在开放访问前完成首次注册。
+
+当前 Compose 会向宿主机发布上述三个端口。公网部署时应配置 HTTPS，并按实际需要限制数据库和后端端口的访问范围。
+
+### 常用维护命令
+
+```powershell
+# 查看后端日志
+docker compose logs --tail 100 -f backend
+
+# 停止服务，保留数据库卷
+docker compose down
+
+# 更新源码后，重新构建并启动
 docker compose up -d --build
 ```
 
-默认端口：
+MySQL 数据保存在命名卷 `mysql-data` 中。升级前备份数据库与密钥；不要使用 `docker compose down -v` 停止需要保留数据的环境。
 
-| 服务 | 地址 |
+当前后端按**单进程、单实例**运行，扫码会话、调度和用户删除保护包含进程内状态，不应直接扩展为多 worker 或多后端副本。
+
+## 配置说明
+
+配置模板见 [.env.example](.env.example)，容器配置见 [docker-compose.yml](docker-compose.yml)。
+
+| 配置项 | 用途 | 设置方式 |
+| --- | --- | --- |
+| `SECRET_KEY` | JWT 签名密钥 | 必须设置固定的强随机值 |
+| `ENCRYPTION_KEY` | 敏感数据加密密钥 | 必须固定并妥善备份 |
+| `MYSQL_DATABASE`、`MYSQL_USER` | Compose 内置数据库名称、用户 | 默认均为 `miyoushe` |
+| `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD` | Compose 内置数据库密码 | 必须替换示例值 |
+| `DATABASE_URL` | 后端数据库连接串 | 本地开发显式填写；Compose 默认自动组装 |
+| `SMTP_HOST`、`SMTP_PORT` | SMTP 地址、端口 | 可选，默认端口为 `465` |
+| `SMTP_USER`、`SMTP_PASSWORD` | SMTP 账号、密码 | 可选，也可在管理员页面配置 |
+| `SMTP_USE_SSL` | SMTP 是否使用 SSL | 默认 `true` |
+| `TEST_DATABASE_URL` | 后端自动化测试数据库 | 仅测试时使用，必须为独立测试库 |
+
+### 数据库与配置文件位置
+
+运行时与数据库测试均仅支持 MySQL。建议使用与容器配置一致的 MySQL 8.4，连接串统一使用：
+
+```dotenv
+DATABASE_URL=mysql+asyncmy://<用户名>:<URL编码后的密码>@<主机>:3306/<数据库名>?charset=utf8mb4
+```
+
+运行时兼容将 `mysql://`、`mysql+pymysql://` 转换为异步连接串；测试库必须显式使用 `mysql+asyncmy://`。
+
+- **Docker Compose**：读取仓库根目录 `.env`，将编排中声明的变量传给后端
+- **本地后端**：读取启动工作目录下的 `.env`；按下文从 `backend/` 启动时，应使用 `backend/.env`
+- **外部 MySQL**：可通过 `DATABASE_URL` 指定连接，但现有 Compose 仍会启动并依赖内置 `mysql` 服务；完全移除内置数据库需要同时调整编排
+
+`MYSQL_*` 是数据库容器的初始化参数，修改 `.env` 不会自动修改已有数据卷中的数据库账号或密码。
+
+### 时间与邮件策略
+
+业务日期、Cron 调度、接口时间和界面显示统一为 `Asia/Shanghai`（北京时间），不提供可选时区。数据库按 UTC 保存绝对时刻，接口输出带 `+08:00` 的时间。
+
+系统 SMTP 决定如何发信；个人通知邮箱决定收件人；个人通知开关与策略决定何时发送签到邮件。管理员公告群发面向已绑定邮箱且启用的用户，不受个人签到通知开关限制。
+
+## 使用指南
+
+1. **注册并登录**：首个用户为管理员；管理员开启注册邀请码后，后续注册需填写正确邀请码
+2. **绑定账号**：进入「账号管理」，使用官方 Passport 二维码完成授权；平台保存根凭据，并尝试补齐工作 Cookie 和游戏角色
+3. **执行签到**：在仪表盘手动签到，查看结果与日志；遇到风控提示时，稍后重试或前往米游社处理
+4. **设置定时任务**：在「系统设置 → 签到调度」开启或关闭自动签到，修改五段式 Cron；默认 `0 6 * * *`，触发后随机延迟 0–60 秒执行
+5. **配置通知**：管理员配置 SMTP，用户填写收件邮箱并选择通知策略
+
+调度器每天北京时间 `03:00` 巡检账号登录态。工作 Cookie 失效时会优先用根凭据修复；提示需要重新登录或升级登录时，请重新扫码。短信验证码接口仅校验根凭据，不直接绑定账号。
+
+### 管理操作
+
+| 入口 | 功能 |
 | --- | --- |
-| 前端 | http://localhost |
-| 后端 API | http://localhost:8000 |
-| 健康检查 | http://localhost:8000/api/health |
-| MySQL | `127.0.0.1:3306` |
+| 用户信息列表 | 查看用户、启用或停用用户、永久删除其他用户 |
+| 菜单与功能开关 | 分别控制普通用户和管理员的菜单可见性 |
+| 系统设置 | 配置 SMTP、注册邀请码、公告邮件群发 |
 
-首次打开页面后注册账号。**第一个注册用户自动成为管理员。**
+删除米游社账号会同时删除其游戏角色和历史签到日志。管理员永久删除平台用户会清理该用户的关联账号、凭据、日志与任务等数据，不能删除当前登录用户。操作前请核对确认框中的范围；提示业务忙碌时稍后重试。
 
-> [!WARNING]
-> `SECRET_KEY` 与 `ENCRYPTION_KEY` 必须写成固定值。若依赖运行期随机默认值，重启后历史根凭据、工作 Cookie 和 SMTP 密码都无法解密。
+菜单显隐不替代服务端权限校验，管理员菜单管理入口会始终保留。
 
-### 本机分别启动
+## 本地开发
 
-前置条件：
+### 技术栈与依赖
 
-- Python 3.13（或 3.11+）
-- Node.js 20+
-- 本机可连接的 MySQL 8，并已创建空库
-- Playwright Chromium（扫码登录依赖浏览器子进程）
+| 层级 | 技术 |
+| --- | --- |
+| 后端 | Python、FastAPI、SQLAlchemy Async、APScheduler、httpx、Playwright |
+| 前端 | Vue 3、TypeScript、Vite、Element Plus、Pinia |
+| 数据库 | MySQL、asyncmy |
+| 容器部署 | Docker Compose、Nginx、Uvicorn |
 
-1. 复制并填写环境变量：
+准备 Python 3.11+（本地建议 3.13）、Node.js 22.6+、npm，以及已创建数据库且授权可用的 MySQL 服务。前端容器使用 Node.js 20 构建；本地建议 Node.js 22.6+，以支持现有测试脚本使用的 `--experimental-strip-types` 参数。
 
-```powershell
-copy .env.example .env
-```
+### 启动后端
 
-在 `.env` 中设置：
-
-```env
-DATABASE_URL=mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe?charset=utf8mb4
-SECRET_KEY=换成足够长的随机串
-ENCRYPTION_KEY=换成另一个足够长的随机串
-```
-
-2. 启动后端：
+在仓库根目录执行：
 
 ```powershell
-cd backend
+Set-Location backend
 python -m venv .venv313
-.\.venv313\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.\.venv313\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv313\Scripts\python.exe -m playwright install chromium
 ```
 
-3. 启动前端：
+新建 `backend/.env`，填写后端需要的配置，不要直接复制根目录模板中的 `MYSQL_*` 容器初始化变量：
+
+```dotenv
+SECRET_KEY=<固定的强随机字符串>
+ENCRYPTION_KEY=<另一个固定的强随机字符串>
+DATABASE_URL=mysql+asyncmy://<用户名>:<URL编码后的密码>@127.0.0.1:3306/<数据库名>?charset=utf8mb4
+```
+
+继续在 `backend/` 下执行：
 
 ```powershell
-cd frontend
-npm install
+.\.venv313\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+后端启动会初始化数据库并启动调度器，请使用开发数据库。
+
+### 启动前端
+
+另开一个 PowerShell 窗口，在仓库根目录执行：
+
+```powershell
+Set-Location frontend
+npm ci
 npm run dev
 ```
 
-本机开发默认地址：
+访问 [http://localhost:3000](http://localhost:3000)。Vite 会将 `/api` 和 `/ws` 请求代理到本机后端 `8000` 端口。
 
-- 前端：http://localhost:3000（Vite 会把 `/api` 与 `/ws` 代理到 `8000`）
-- 后端：http://localhost:8000
+### 静态检查与构建
 
-Windows 下后端会使用 `ProactorEventLoop`，否则 Playwright 扫码子进程无法启动。
+在 `backend/` 下执行 Python 编译检查：
 
-## 配置
+```powershell
+.\.venv313\Scripts\python.exe -m compileall app
+```
 
-完整示例见 [.env.example](.env.example)。Docker 部署时，`docker-compose.yml` 会读取根目录 `.env`。
+在 `frontend/` 下执行类型检查与生产构建：
 
-### 环境变量
+```powershell
+npm run build
+```
 
-| 变量 | 必填 | 说明 |
-| --- | --- | --- |
-| `SECRET_KEY` | 是 | JWT 签名密钥，生产环境必须改成强随机值 |
-| `ENCRYPTION_KEY` | 是 | AES 加密密钥，用于根凭据、工作 Cookie、SMTP 密码等；**部署后不要更换** |
-| `DATABASE_URL` | 本机直连时是 | 仅接受 `mysql+asyncmy://`。本机默认连 `127.0.0.1:3306`；Compose 默认连容器内 `mysql:3306` |
-| `MYSQL_DATABASE` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD` | Compose 时是 | 内置 MySQL 容器的初始化参数 |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_USE_SSL` | 否 | 系统 SMTP 回退配置；管理员也可在后台覆盖 |
-| `TEST_DATABASE_URL` | 跑测试时是 | 独立测试 schema，必须是 `mysql+asyncmy://`，禁止指向业务库 |
+构建脚本依次执行 `vue-tsc --noEmit` 和 Vite 构建。构建通过不代表登录、签到等实际流程已验收。
 
-接外部 MySQL 时只需覆盖 `DATABASE_URL`，不必使用内置 MySQL 容器。`mysql://` 与 `mysql+pymysql://` 会在启动时改写成 `mysql+asyncmy://`；其它方言会直接失败。
+### 自动化测试
 
-当前运行时是 **MySQL-only**，不再支持 SQLite。
+后端使用 `unittest`。数据库测试会建表、清空数据，部分用例会重建表结构；仅在确认可销毁的独立测试库中运行，禁止指向正式库或需要保留数据的开发库。
 
-### 时区
+在 `backend/` 下执行：
 
-业务日期、接口时间、调度 Cron、前端展示和容器日志全部固定为 `Asia/Shanghai`。
+```powershell
+$env:TEST_DATABASE_URL="mysql+asyncmy://<测试用户>:<URL编码后的密码>@127.0.0.1:3306/miyoushe_test?charset=utf8mb4"
+.\.venv313\Scripts\python.exe -m unittest discover -s tests -v
+```
 
-- 不提供 `APP_TIMEZONE` 或其它时区选项
-- 数据库 `DateTime` 仍按 UTC 绝对时刻存储，接口输出带 `+08:00`
-- JWT `exp` 继续使用 UTC（协议要求）
+在 `frontend/` 下执行现有 TypeScript 回归脚本：
 
-### 邮件
-
-系统发信与用户收件是两层配置，排障时不要混在一起：
-
-1. **系统 SMTP**：管理员在「系统设置」里维护，决定系统能不能发信
-2. **用户通知邮箱**：普通用户在个人设置里填写，决定邮件发给谁
-3. **通知策略**：`always`（每次都通知）或 `failure_only`（仅失败时通知）
-4. **管理员群发**：发给「已绑定邮箱且账号启用」的用户，忽略个人通知开关
-
-## 使用说明
-
-### 注册与登录
-
-- 打开前端，注册平台账号；首个用户为管理员
-- 管理员可开启全站邀请码，之后的注册必须携带正确邀请码
-- 登录后签发 JWT：访问令牌 24 小时，刷新令牌 30 天
-
-### 绑定米游社账号
-
-在「账号管理」中使用官方 Passport 二维码绑定。扫码成功后保存高权限根凭据，再由后续任务补齐工作 Cookie 和角色列表。
-
-删除账号会同时永久删除其全部游戏角色和历史签到日志，确认框会列明范围；账号不存在或不属于当前用户时返回 404。删除在一个事务中完成，失败会回滚，不需要数据库结构迁移。
-
-签到、登录态维护、扫码保存与删除使用按数据库和账号隔离的 MySQL 命名锁；账号忙时删除返回 409，请稍后重试。每个同时执行的账号操作额外占用一个数据库连接，锁跨业务提交保持有效。升级时所有后端进程需同步更新并连接同一 MySQL 服务端，旧版本进程不参与该协调协议。
-
-短信验证码接口目前只校验 Passport 根凭据，**不会直接落库绑定账号**。
-
-旧的网页登录 Cookie-only 账号会显示「需要升级登录」。对这类账号点「校验登录态」不会自动补齐高权限能力，需要重新扫码。
-
-
-### 签到
-
-- 仪表盘可立即签到，并查看今日成功 / 失败 / 待签数量
-- 「系统设置 → 签到调度」可开关自动签到、修改 Cron
-- 到达 Cron 时间后，系统会在 1 分钟内随机错峰执行
-- 调度器每天东八区 `03:00` 巡检全部账号登录态
-- 手动签到、定时签到前，若账号状态不是 `valid`，会先做一次登录态校验
-
-### 管理员
-
-| 页面 | 作用 |
-| --- | --- |
-| 用户信息列表 | 查看用户、启停账号 |
-| 菜单与功能开关 | 控制各菜单对普通用户 / 管理员是否可见 |
-| 系统设置 | SMTP、邀请码、公告邮件群发 |
-
-`admin_menu_management` 是管理员保底入口，后台不允许把它隐藏掉。
+```powershell
+npm test
+```
 
 ## 项目结构
 
 ```text
 .
-├─ backend/
-│  ├─ app/
-│  │  ├─ api/          # FastAPI 路由：auth / accounts / tasks / logs / admin
-│  │  ├─ models/       # SQLAlchemy 模型
-│  │  ├─ schemas/      # Pydantic 响应模型
-│  │  ├─ services/     # 登录、签到、调度、通知等业务逻辑
-│  │  ├─ plugins/      # 签到插件入口
-│  │  ├─ utils/        # 加密、DS、设备指纹、时区
-│  │  ├─ config.py
-│  │  ├─ database.py
-│  │  └─ main.py       # 应用入口、生命周期、扫码 WebSocket
-│  ├─ tests/           # unittest，依赖独立 MySQL 测试库
-│  ├─ Dockerfile
-│  └─ requirements.txt
-├─ frontend/
-│  ├─ src/
-│  │  ├─ api/
-│  │  ├─ components/
-│  │  ├─ views/        # 仪表盘、账号、日志、设置、管理页
-│  │  ├─ stores/
-│  │  ├─ router/
-│  │  └─ styles/
-│  ├─ tests/
-│  ├─ nginx.conf
-│  └─ Dockerfile
-├─ docs/maintenance/   # 登录凭据等长文维护说明
-├─ docker-compose.yml
-└─ .env.example
+├── backend/
+│   ├── app/
+│   │   ├── api/          # HTTP 路由
+│   │   ├── models/       # 数据模型
+│   │   ├── schemas/      # 接口数据结构
+│   │   ├── services/     # 登录、签到、调度、通知等业务逻辑
+│   │   ├── utils/        # 加密、设备参数、时区等工具
+│   │   ├── config.py     # 应用配置
+│   │   ├── database.py   # 数据库连接与初始化
+│   │   └── main.py       # 应用入口与扫码 WebSocket
+│   ├── tests/            # 后端回归用例
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── api/          # 请求封装
+│   │   ├── components/   # 共享组件
+│   │   ├── views/        # 页面
+│   │   ├── stores/       # 状态管理
+│   │   ├── router/       # 路由
+│   │   ├── styles/       # 样式
+│   │   └── utils/        # 前端工具
+│   ├── tests/            # 前端回归用例
+│   ├── nginx.conf
+│   └── Dockerfile
+├── .env.example          # Compose 环境变量模板
+├── docker-compose.yml
+└── AGENTS.md             # 仓库协作约定
 ```
 
-## 本地开发
+## 常见问题
 
-后端：
+| 问题 | 排查方向 |
+| --- | --- |
+| 本地启动未读到配置 | 确认启动目录为 `backend/`，配置位于 `backend/.env`，或已通过进程环境变量提供 |
+| 数据库连接失败 | 核对服务状态、账号权限、数据库名和连接地址；容器内置库使用 `mysql:3306`，宿主机直连使用实际地址 |
+| 二维码无法加载或持续断开 | 查看后端日志，确认反向代理同时转发 `/api/` 与 `/ws/`，并支持 WebSocket Upgrade |
+| 账号提示需要升级登录 | 旧 Cookie-only 账号需要重新扫码，重复点击校验不会补齐高权限凭据 |
+| 重启后已有凭据无法解密 | 检查 `ENCRYPTION_KEY` 是否与原部署一致，以及配置文件是否被正确读取 |
+| 签到失败、风控或维护提示 | 查看日志中的具体上游错误；确认游戏渠道在适配范围内，必要时前往米游社处理 |
+| 邮件没有收到 | 检查系统 SMTP、用户邮箱、个人通知开关和通知策略；管理员群发不采用个人签到通知策略 |
+| 删除提示忙碌 | 等待该用户或账号正在执行的业务完成后重试 |
 
-```powershell
-cd backend
-.\.venv313\Scripts\activate
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
+需要进一步定位时，可使用 `docker compose logs --tail 100 backend` 收集日志。提交问题前请移除 Cookie、令牌、密钥、邮箱及其他个人信息。
 
-前端：
+## 反馈与贡献
 
-```powershell
-cd frontend
-npm install
-npm run dev
-```
+欢迎通过仓库 Issues 反馈问题或提出功能建议，通过 Pull Request 提交改进。
 
-代码约定：
+提交问题时请提供：
 
-- Python 4 空格，Vue / TypeScript / CSS 2 空格
-- Python 模块与函数用 `snake_case`；Vue 页面用 PascalCase，例如 `AdminUsers.vue`
-- 业务规则、兼容约束或失败风险不明显时，保留中文维护注释
-- 不要提交 `.env`、`frontend/dist/`、`.venv*`、`.playwright-cli/`、`output/` 或临时数据库文件
+- 部署方式、代码版本、运行环境
+- 复现步骤、预期结果与实际结果
+- 脱敏日志；界面问题可附截图
 
-## 测试
-
-后端测试使用 `unittest`，**必须**指向独立 MySQL schema。测试基座会在每个用例前建表并清空所有表，不要把 `TEST_DATABASE_URL` 指向正式业务库。
-
-```powershell
-cd backend
-$env:TEST_DATABASE_URL="mysql+asyncmy://miyoushe:change_me_mysql_password@127.0.0.1:3306/miyoushe_test?charset=utf8mb4"
-.\.venv313\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv313\Scripts\python.exe -m compileall app
-```
-
-前端：
-
-```powershell
-cd frontend
-npm test
-npm run build
-```
-
-`npm test` 跑 TypeScript 回归脚本；`npm run build` 会先 `vue-tsc --noEmit` 再打包。
-
-涉及登录、调度或 API 行为变更时，请同步补充后端测试。UI 改动建议同时看桌面、平板、手机和深色模式。
-
-## 故障排查
-
-**签到失败或提示维护中**  
-先看签到日志里的上游错误，不要只看状态标签。崩坏 3 与绝区零使用独立活动参数 / 接口路径，不能和原神、星铁的通用 `event/luna` 配置合并。
-
-**邮件没发出去**  
-同时检查：系统 SMTP 是否启用、用户是否填了接收邮箱、个人通知开关、通知策略是否为「仅失败时通知」。管理员群发不会走个人 `email_notify` / `notify_on`。
-
-**反复提示需要重新扫码**  
-账号进入 `reauth_required` 表示工作 Cookie 和根凭据都已无法自动修复。继续点「校验登录态」只会得到同一结论，应直接重新扫码。失效邮件默认只在首次进入该状态时发送一次。
-
-**重启后全部账号无法解密**  
-先确认 `ENCRYPTION_KEY` 是否固定，不要当成官方登录接口失效。
-
-**Docker 日志时间不对**  
-容器时区必须是 `Asia/Shanghai`。若 `docker exec -it miyoushe-backend date` 不是 CST/+08，重建后端镜像：
-
-```powershell
-docker compose up -d --build backend
-```
-
-不要把容器时区改成宿主时区。
-
-## 贡献指南
-
-提交信息使用 [Conventional Commits](https://www.conventionalcommits.org/)：
+贡献前请阅读 [AGENTS.md](AGENTS.md)。保持改动范围集中，遵循现有代码风格；涉及登录、调度或 API 行为时补充有意义的回归用例。提交信息采用 Conventional Commits，例如：
 
 ```text
-feat(frontend): 支持按游戏筛选签到日志
-fix(signin): 修正崩坏3活动参数
-docs(readme): 按当前源码重写说明
+feat(frontend): 增加签到日志筛选
+fix(signin): 修正游戏活动参数
+docs(readme): 更新部署说明
 ```
 
-Pull Request 请写明：
-
-- 用户可见的变化
-- 验证命令（后端测试、前端 `npm test` / `npm run build`）
-- 配置或数据库影响
-- 前端改动附截图
-
-仓库协作约定见 [AGENTS.md](AGENTS.md)。
-
-## 相关文档
-
-- [环境变量示例](.env.example)
-- [Docker Compose](docker-compose.yml)
+PR 请说明用户可见变化、实际完成的验证、未验证项，以及配置或数据库影响。界面变更请附截图或人工验收步骤，覆盖相关的桌面、平板、手机与深色模式。

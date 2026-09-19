@@ -284,6 +284,7 @@ class PassportQrLoginSession:
         self.qr_url: Optional[str] = None
         self.login_result: Optional[dict[str, Any]] = None
         self.error_message: Optional[str] = None
+        self.task: asyncio.Task | None = None
 
     async def start(self):
         try:
@@ -350,10 +351,11 @@ class PassportQrLoginSession:
         return self.login_result
 
     async def close(self):
-        # 官方 Passport 链路当前只走 HTTP 请求，不持有浏览器资源。
-        # 保留统一关闭入口，是为了让 main.py 可以无差别管理旧/新登录会话生命周期，
-        # 后续若在这里加入额外轮询资源，也不会再回头改 WebSocket finally 结构。
-        return None
+        self.ticket = None
+        self.qr_url = None
+        self.login_result = None
+        self.task = None
+        self.status = "failed"
 
 
 class QrAuthorizationError(ValueError):
@@ -414,6 +416,17 @@ class PassportQrLoginManager:
             if grant:
                 grant[2].cancel()
         await session.close()
+
+    async def remove_user_sessions(self, user_id: int):
+        """终止用户的扫码连接，等待 finally 释放凭据后再完成删除"""
+        sessions = [session for session in self._sessions.values() if session.user_id == user_id]
+        tasks = {session.task for session in sessions if session.task and not session.task.done()}
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for session in sessions:
+            await self.remove_session(session)
 
 
 passport_login_manager = PassportQrLoginManager()

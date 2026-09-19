@@ -32,6 +32,9 @@ from app.api.auth import require_admin
 from app.services.admin_broadcast import AdminBroadcastService
 from app.services.system_settings import SystemSettingsService
 from app.services.scheduler import scheduler_service
+from app.services.user_deletion import UserDeletionService
+from app.services.user_operations import user_operation
+from app.services.user_activity import require_active_user
 from app.utils.crypto import encrypt_text
 
 router = APIRouter(prefix="/api/admin", tags=["管理员"])
@@ -57,6 +60,11 @@ async def toggle_user_active(
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="不能禁用自己的账号")
 
+    with user_operation(user_id):
+        return await _toggle_user_active(user_id, db)
+
+
+async def _toggle_user_active(user_id: int, db: AsyncSession):
     async with scheduler_service.user_schedule_lock(user_id):
         result = await db.execute(
             select(User).where(User.id == user_id).with_for_update()
@@ -82,6 +90,20 @@ async def toggle_user_active(
                 detail=f"用户已{'启用' if is_active else '禁用'}，但调度同步失败；请刷新用户列表，勿重复切换。管理员需检查调度日志并恢复运行态",
             ) from exc
     return {"message": f"用户已{'启用' if is_active else '禁用'}", "is_active": is_active}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """永久删除其他用户及关联业务数据；重复请求会重试运行态清理"""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="不能删除自己的账号")
+    with user_operation(admin.id):
+        await require_active_user(db, admin.id)
+        return await UserDeletionService(db).delete(user_id)
 
 
 @router.get("/stats")

@@ -45,6 +45,7 @@ from app.services.account_operations import account_operation, load_current_acco
 from app.services.account_role_sync import fetch_game_roles
 from app.services.system_settings import SystemSettingsService
 from app.services.user_activity import UserInactiveError, require_active_user
+from app.services.user_operations import user_operation
 from app.utils.crypto import decrypt_cookie
 from app.utils.device import (
     DEVICE_FP_URL,
@@ -209,6 +210,10 @@ class CheckinService:
         )
 
     async def execute_for_user(self, user_id: int) -> CheckinSummary:
+        with user_operation(user_id):
+            return await self._execute_for_user(user_id)
+
+    async def _execute_for_user(self, user_id: int) -> CheckinSummary:
         """
         为指定用户的所有账号执行签到。
 

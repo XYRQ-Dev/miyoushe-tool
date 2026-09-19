@@ -25,6 +25,7 @@ from app.database import init_db, async_session
 from app.models.account import MihoyoAccount
 from app.models.user import User
 from app.services.account_credentials import AccountCredentialService, AccountUidMismatchError
+from app.services.user_operations import user_operation
 from app.services.account_operations import account_operation
 from app.services.account_role_sync import refresh_account_roles
 from app.services.browser import browser_manager
@@ -172,6 +173,7 @@ async def qr_login_websocket(
         ):
             raise QrAuthorizationError("扫码协议已更新，请刷新页面后重试")
         session = passport_login_manager.claim_session(session_id, frame["credential"])
+        session.task = asyncio.current_task()
         async with async_session() as db:
             await _check_qr_authorization(db, session)
         await websocket.send_json({"type": "status", "status": "initializing"})
@@ -206,30 +208,31 @@ async def qr_login_websocket(
                     })
                     return
 
-                async with async_session() as db:
-                    # 新事务重新检查并锁定用户与目标账号，避免等待扫码期间授权已变化
-                    account = await _check_qr_authorization(db, session, lock=True)
-                    if account is None:
-                        account = MihoyoAccount(user_id=session.user_id)
-                        db.add(account)
-                        await db.flush()
+                with user_operation(session.user_id):
+                    async with async_session() as db:
+                        # 新事务重新检查并锁定用户与目标账号，避免等待扫码期间授权已变化
+                        account = await _check_qr_authorization(db, session, lock=True)
+                        if account is None:
+                            account = MihoyoAccount(user_id=session.user_id)
+                            db.add(account)
+                            await db.flush()
 
-                    async with account_operation(db, account.id):
-                        # 登录成功后的字段写库、自愈补齐、工作 Cookie 重建必须统一走同一个服务入口。
-                        # 如果继续在 WebSocket 成功分支手写一组字段，后续短信登录、自愈重建和旧账号升级
-                        # 很快就会出现状态字段不一致的问题，维护者也无法再判断“哪个入口才是准绳”。
-                        credential_service = AccountCredentialService(db)
-                        credential_result = await credential_service.persist_login_result(account, login_result)
-                        roles_result = {"roles_sync_status": "pending", "roles_count": None}
-                        if credential_result["state"] == "valid":
-                            roles_result = await refresh_account_roles(db=db, account=account)
-                        else:
-                            account.last_refresh_message = (
-                                f"{account.last_refresh_message}；角色同步待重试，请先通过“校验登录态”恢复工作 Cookie"
-                            )
+                        async with account_operation(db, account.id):
+                            # 登录成功后的字段写库、自愈补齐、工作 Cookie 重建必须统一走同一个服务入口。
+                            # 如果继续在 WebSocket 成功分支手写一组字段，后续短信登录、自愈重建和旧账号升级
+                            # 很快就会出现状态字段不一致的问题，维护者也无法再判断“哪个入口才是准绳”。
+                            credential_service = AccountCredentialService(db)
+                            credential_result = await credential_service.persist_login_result(account, login_result)
+                            roles_result = {"roles_sync_status": "pending", "roles_count": None}
+                            if credential_result["state"] == "valid":
+                                roles_result = await refresh_account_roles(db=db, account=account)
+                            else:
+                                account.last_refresh_message = (
+                                    f"{account.last_refresh_message}；角色同步待重试，请先通过“校验登录态”恢复工作 Cookie"
+                                )
 
-                        await db.commit()
-                        await db.refresh(account)
+                            await db.commit()
+                            await db.refresh(account)
 
                 await websocket.send_json({
                     "type": "success",

@@ -8,6 +8,7 @@
 """
 
 import json
+from contextlib import ExitStack
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,8 @@ from app.schemas.admin_notification import (
     AdminBroadcastEmailResponse,
 )
 from app.services.notifier import NotificationService
+from app.services.user_activity import require_active_user
+from app.services.user_operations import user_operation
 
 
 class AdminBroadcastService:
@@ -56,7 +59,28 @@ class AdminBroadcastService:
         admin: User,
         payload: AdminBroadcastEmailRequest,
     ) -> AdminBroadcastEmailResponse:
-        recipients = await self._load_recipients()
+        # 一直保护收件人和操作者到审计提交，避免删除后旧失败列表又写回个人信息
+        with ExitStack() as operations:
+            operations.enter_context(user_operation(admin.id))
+            await require_active_user(self.db, admin.id)
+            candidates = await self._load_recipients()
+            for user_id in {user.id for user in candidates}:
+                operations.enter_context(user_operation(user_id))
+            # 鉴权和初次查询可能持有旧快照，登记保护后用独立短事务读取当前收件人
+            async with AsyncSession(bind=self.db.bind) as state_db:
+                recipients = list((await state_db.scalars(
+                    select(User).where(
+                        User.id.in_([user.id for user in candidates]),
+                        User.is_active.is_(True),
+                        User.email.is_not(None),
+                    ).order_by(User.id)
+                )).all())
+            recipients = [user for user in recipients if (user.email or "").strip()]
+            return await self._broadcast_email(admin=admin, payload=payload, recipients=recipients)
+
+    async def _broadcast_email(
+        self, *, admin: User, payload: AdminBroadcastEmailRequest, recipients: list[User],
+    ) -> AdminBroadcastEmailResponse:
         if not recipients:
             raise ValueError("当前没有已绑定邮箱且启用的用户")
 

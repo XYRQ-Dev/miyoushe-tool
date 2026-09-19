@@ -23,6 +23,7 @@ from app.services.notifier import notification_service
 from app.services.scheduler import ScheduleRegistrationError, ScheduleRegistrationResult, scheduler_service
 from app.services.task_config import get_or_create_task_config
 from app.services.user_activity import require_active_user
+from app.services.user_operations import user_operation
 from app.utils.timezone import get_shanghai_date, get_shanghai_day_utc_range
 
 logger = logging.getLogger(__name__)
@@ -53,15 +54,16 @@ async def get_task_config(
     db: AsyncSession = Depends(get_db),
 ):
     """获取配置，并尝试自愈本进程缺失的启用任务；失败通过 scheduler_error 返回"""
-    async with scheduler_service.user_schedule_lock(current_user.id):
-        await require_active_user(db, current_user.id)
-        config, _ = await get_or_create_task_config(
-            db, current_user.id, auto_commit=True, for_update=True,
-        )
-        runtime = await scheduler_service.ensure_user_schedule(
-            config, user_active=current_user.is_active,
-        )
-        return _build_task_config_response(config, runtime)
+    with user_operation(current_user.id):
+        async with scheduler_service.user_schedule_lock(current_user.id):
+            await require_active_user(db, current_user.id)
+            config, _ = await get_or_create_task_config(
+                db, current_user.id, auto_commit=True, for_update=True,
+            )
+            runtime = await scheduler_service.ensure_user_schedule(
+                config, user_active=current_user.is_active,
+            )
+            return _build_task_config_response(config, runtime)
 
 
 @router.put("/config", response_model=TaskConfigResponse)
@@ -77,33 +79,34 @@ async def update_task_config(
     except ScheduleRegistrationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    async with scheduler_service.user_schedule_lock(user_id):
-        await require_active_user(db, user_id)
-        snapshot = scheduler_service.snapshot_user_schedule(user_id)
-        runtime_changed = False
-        try:
-            # 鉴权可能已建立 MySQL 事务快照，锁定读取确保等待后使用最新配置
-            config, _ = await get_or_create_task_config(db, user_id, for_update=True)
-            config.cron_expr = data.cron_expr
-            config.is_enabled = data.is_enabled
-            await db.flush()
-            runtime = await scheduler_service.update_user_schedule(user_id, config)
-            runtime_changed = True
-            # 提交前完成响应构造，避免提交后 refresh 失败被误当成提交失败补偿
-            response = _build_task_config_response(config, runtime)
-            await db.commit()
-        except BaseException as exc:
+    with user_operation(user_id):
+        async with scheduler_service.user_schedule_lock(user_id):
+            await require_active_user(db, user_id)
+            snapshot = scheduler_service.snapshot_user_schedule(user_id)
+            runtime_changed = False
             try:
-                await db.rollback()
-            except Exception:
-                logger.exception("用户 %s 调度配置回滚失败，最初异常: %s", user_id, exc)
-            if runtime_changed:
-                scheduler_service.restore_user_schedule(user_id, snapshot, exc)
-            if isinstance(exc, ScheduleRegistrationError):
-                raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-            raise
-        scheduler_service.clear_user_schedule_error(user_id)
-        return response.model_copy(update={"scheduler_error": None})
+                # 鉴权可能已建立 MySQL 事务快照，锁定读取确保等待后使用最新配置
+                config, _ = await get_or_create_task_config(db, user_id, for_update=True)
+                config.cron_expr = data.cron_expr
+                config.is_enabled = data.is_enabled
+                await db.flush()
+                runtime = await scheduler_service.update_user_schedule(user_id, config)
+                runtime_changed = True
+                # 提交前完成响应构造，避免提交后 refresh 失败被误当成提交失败补偿
+                response = _build_task_config_response(config, runtime)
+                await db.commit()
+            except BaseException as exc:
+                try:
+                    await db.rollback()
+                except Exception:
+                    logger.exception("用户 %s 调度配置回滚失败，最初异常: %s", user_id, exc)
+                if runtime_changed:
+                    scheduler_service.restore_user_schedule(user_id, snapshot, exc)
+                if isinstance(exc, ScheduleRegistrationError):
+                    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+                raise
+            scheduler_service.clear_user_schedule_error(user_id)
+            return response.model_copy(update={"scheduler_error": None})
 
 
 @router.post("/execute", response_model=CheckinSummary)
@@ -112,20 +115,21 @@ async def execute_checkin(
     db: AsyncSession = Depends(get_db),
 ):
     """手动立即执行签到（对该用户的所有启用账号）"""
-    checkin_service = CheckinService(db)
-    summary = await checkin_service.execute_for_user(current_user.id)
+    with user_operation(current_user.id):
+        checkin_service = CheckinService(db)
+        summary = await checkin_service.execute_for_user(current_user.id)
 
-    # 手动签到与定时签到必须复用同一套通知语义，避免后续维护时一条链路发邮件、
-    # 另一条链路不发邮件，导致用户设置（通知邮箱、通知策略、SMTP）表现不一致。
-    # 这里必须复用 NotificationService，而不是在接口层重新拼装“手动专用”通知规则，
-    # 否则排障时会出现“定时任务会发、手动执行不发”之类的行为分叉。
-    await notification_service.send_checkin_report(
-        current_user.id,
-        summary,
-        db,
-        source="manual_execute",
-    )
-    return summary
+        # 手动签到与定时签到必须复用同一套通知语义，避免后续维护时一条链路发邮件、
+        # 另一条链路不发邮件，导致用户设置（通知邮箱、通知策略、SMTP）表现不一致。
+        # 这里必须复用 NotificationService，而不是在接口层重新拼装“手动专用”通知规则，
+        # 否则排障时会出现“定时任务会发、手动执行不发”之类的行为分叉。
+        await notification_service.send_checkin_report(
+            current_user.id,
+            summary,
+            db,
+            source="manual_execute",
+        )
+        return summary
 
 
 @router.get("/status")

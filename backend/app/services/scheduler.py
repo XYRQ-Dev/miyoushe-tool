@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Optional
+from weakref import WeakValueDictionary
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -26,6 +27,7 @@ from app.services.checkin import CheckinService
 from app.services.login_state import LoginStateService
 from app.services.task_config import ensure_all_users_have_task_config
 from app.services.user_activity import UserInactiveError, is_user_active, require_active_user
+from app.services.user_operations import user_operation
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +56,10 @@ class SchedulerService:
         # cron 的“每天 6 点”固定为东八区 6 点，不跟随部署机器或浏览器时区。
         self.scheduler = AsyncIOScheduler(timezone=SHANGHAI)
         self._started = False
-        self._schedule_locks: dict[int, asyncio.Lock] = {}
+        # 持有者和等待者会保留强引用，空闲锁自动回收，避免删除用户后留下锁条目
+        self._schedule_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
         self._schedule_errors: dict[int, str] = {}
+        self._checkin_tasks: dict[int, set[asyncio.Task]] = {}
 
     def user_schedule_lock(self, user_id: int) -> asyncio.Lock:
         """串行化本进程同一用户的配置读取、更新及补偿"""
@@ -321,6 +325,29 @@ class SchedulerService:
         )
 
     async def _execute_checkin(self, user_id: int):
+        task = asyncio.current_task()
+        tasks = self._checkin_tasks.setdefault(user_id, set())
+        tasks.add(task)
+        try:
+            await self._run_checkin(user_id)
+        finally:
+            tasks.discard(task)
+            if not tasks:
+                self._checkin_tasks.pop(user_id, None)
+
+    async def remove_user_runtime(self, user_id: int):
+        """删除入口持有用户保护；这里只取消尚未进入业务阶段的延迟任务"""
+        job_id = self._build_job_id(user_id)
+        if self.scheduler.get_job(job_id) is not None:
+            self.scheduler.remove_job(job_id)
+        tasks = list(self._checkin_tasks.get(user_id, ()))
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self.clear_user_schedule_error(user_id)
+
+    async def _run_checkin(self, user_id: int):
         """
         执行签到任务（由调度器自动调用）
         添加随机延迟（0-60 秒），避免所有用户同时请求
@@ -333,30 +360,31 @@ class SchedulerService:
         import asyncio
         await asyncio.sleep(delay)
 
-        async with async_session() as db:
-            checkin_service = CheckinService(db)
-            try:
-                await require_active_user(db, user_id)
-                summary = await checkin_service.execute_for_user(user_id)
-                await require_active_user(db, user_id)
-            except UserInactiveError:
-                logger.info("用户 %s 已禁用或不存在，停止本轮签到，不发送成功报告", user_id)
-                return
+        with user_operation(user_id):
+            async with async_session() as db:
+                checkin_service = CheckinService(db)
+                try:
+                    await require_active_user(db, user_id)
+                    summary = await checkin_service.execute_for_user(user_id)
+                    await require_active_user(db, user_id)
+                except UserInactiveError:
+                    logger.info("用户 %s 已禁用或不存在，停止本轮签到，不发送成功报告", user_id)
+                    return
 
-            logger.info(
-                f"用户 {user_id} 签到完成: "
-                f"成功={summary.success}, 失败={summary.failed}, "
-                f"已签={summary.already_signed}, 风控={summary.risk}"
-            )
+                logger.info(
+                    f"用户 {user_id} 签到完成: "
+                    f"成功={summary.success}, 失败={summary.failed}, "
+                    f"已签={summary.already_signed}, 风控={summary.risk}"
+                )
 
-            # 触发邮件通知
-            from app.services.notifier import notification_service
-            await notification_service.send_checkin_report(
-                user_id,
-                summary,
-                db,
-                source="scheduled_checkin",
-            )
+                # 触发邮件通知
+                from app.services.notifier import notification_service
+                await notification_service.send_checkin_report(
+                    user_id,
+                    summary,
+                    db,
+                    source="scheduled_checkin",
+                )
 
     async def _check_cookies(self):
         """
@@ -369,24 +397,29 @@ class SchedulerService:
 
         async with async_session() as db:
             result = await db.execute(
-                select(MihoyoAccount).join(User, User.id == MihoyoAccount.user_id).where(
+                select(MihoyoAccount.id, MihoyoAccount.user_id).join(User, User.id == MihoyoAccount.user_id).where(
                     MihoyoAccount.cookie_encrypted.is_not(None), User.is_active.is_(True),
                 )
             )
-            accounts = result.scalars().all()
+            accounts = result.all()
 
             login_state_service = LoginStateService(db)
             checked_count = 0
 
-            for account_id in [account.id for account in accounts]:
+            for account_id, user_id in accounts:
                 try:
-                    account = await db.get(MihoyoAccount, account_id)
-                    if account is None:
-                        continue
-                    if not await is_user_active(db, account.user_id):
-                        continue
-                    await login_state_service.refresh_account_login_state(account)
-                    checked_count += 1
+                    with user_operation(user_id):
+                        if not await is_user_active(db, user_id):
+                            continue
+                        account = await db.get(MihoyoAccount, account_id)
+                        if account is None:
+                            continue
+                        try:
+                            await login_state_service.refresh_account_login_state(account)
+                            checked_count += 1
+                        finally:
+                            # 巡检只预取 ID，不跨用户长期持有其他用户的加密凭据
+                            account = None
                 except HTTPException as exc:
                     if exc.status_code not in (404, 409):
                         raise

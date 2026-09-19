@@ -128,7 +128,9 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_refresh_checks_owner_before_issuing(self):
         db = fake_db([None])
-        with patch.object(accounts, "passport_login_manager", self.manager):
+        with patch.object(accounts, "passport_login_manager", self.manager), patch.object(
+            accounts, "require_active_user", new=AsyncMock(),
+        ):
             with self.assertRaises(HTTPException) as error:
                 await accounts.refresh_cookie(22, SimpleNamespace(id=11), db)
         self.assertEqual(error.exception.status_code, 404)
@@ -137,8 +139,10 @@ class QrAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params, {"id_1": 22, "user_id_1": 11})
 
     async def test_http_binding_and_refresh_issue_server_owned_grants(self):
-        with patch.object(accounts, "passport_login_manager", self.manager):
-            new = await accounts.start_qr_login(SimpleNamespace(id=11))
+        with patch.object(accounts, "passport_login_manager", self.manager), patch.object(
+            accounts, "require_active_user", new=AsyncMock(),
+        ):
+            new = await accounts.start_qr_login(SimpleNamespace(id=11), fake_db([]))
             refresh = await accounts.refresh_cookie(22, SimpleNamespace(id=11), fake_db([object()]))
         self.assertIsNone(self.manager.claim_session(new.session_id, new.credential).account_id)
         session = self.manager.claim_session(refresh.session_id, refresh.credential)
