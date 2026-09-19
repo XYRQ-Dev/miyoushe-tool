@@ -17,7 +17,7 @@
         </div>
         <div class="stat-info">
           <div class="stat-value">{{ status.signed_today || 0 }}</div>
-          <div class="stat-label">今日已签</div>
+          <div class="stat-label">今日已签角色</div>
         </div>
       </div>
 
@@ -27,7 +27,7 @@
         </div>
         <div class="stat-info">
           <div class="stat-value">{{ status.failed_today || 0 }}</div>
-          <div class="stat-label">签到失败</div>
+          <div class="stat-label">今日失败角色</div>
         </div>
       </div>
 
@@ -37,7 +37,7 @@
         </div>
         <div class="stat-info">
           <div class="stat-value">{{ status.risk_today || 0 }}</div>
-          <div class="stat-label">今日风控</div>
+          <div class="stat-label">今日风控角色</div>
         </div>
       </div>
 
@@ -47,7 +47,7 @@
         </div>
         <div class="stat-info">
           <div class="stat-value">{{ status.pending || 0 }}</div>
-          <div class="stat-label">待签到</div>
+          <div class="stat-label">待签角色</div>
         </div>
       </div>
     </div>
@@ -95,7 +95,7 @@
 
     <el-card class="calendar-card" shadow="never">
       <template #header>
-        <span>最近 7 天签到记录</span>
+        <span>最近 7 天签到记录（成功次数/总次数）</span>
       </template>
       <div class="calendar-grid">
         <div

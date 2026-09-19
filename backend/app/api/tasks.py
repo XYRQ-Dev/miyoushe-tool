@@ -7,7 +7,7 @@
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -133,7 +133,7 @@ async def get_today_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取今日签到状态概览"""
+    """按当前启用且支持的角色最新签到记录统计今日互斥状态"""
     today_start, today_end = get_shanghai_day_utc_range(get_shanghai_date())
 
     # 查询该用户所有账号
@@ -146,35 +146,42 @@ async def get_today_status(
     if not account_ids:
         return {
             "total_accounts": 0,
+            "total_roles": 0,
             "signed_today": 0,
             "failed_today": 0,
             "risk_today": 0,
             "pending": 0,
         }
 
-    # 查询今日日志
-    logs_result = await db.execute(
-        select(TaskLog).where(
-            TaskLog.account_id.in_(account_ids),
-            TaskLog.executed_at >= today_start,
-            TaskLog.executed_at < today_end,
-        )
-    )
-    logs = logs_result.scalars().all()
-
-    signed = sum(1 for l in logs if l.status in ("success", "already_signed"))
-    failed = sum(1 for l in logs if l.status == "failed")
-    risk = sum(1 for l in logs if l.status == "risk")
-
-    # 统计游戏角色总数
+    # 仅当前启用且支持的角色参与统计，账号级日志不能占用角色的待签名额
     roles_result = await db.execute(
-        select(func.count(GameRole.id)).where(
+        select(GameRole.id).where(
             GameRole.account_id.in_(account_ids),
             GameRole.is_enabled == True,
             GameRole.game_biz.in_(SUPPORTED_CHECKIN_BIZ),
         )
     )
-    total_roles = roles_result.scalar() or 0
+    role_ids = roles_result.scalars().all()
+    latest_statuses: dict[int, str] = {}
+    if role_ids:
+        logs_result = await db.execute(
+            select(TaskLog.game_role_id, TaskLog.status).where(
+                TaskLog.account_id.in_(account_ids),
+                TaskLog.game_role_id.in_(role_ids),
+                TaskLog.task_type == "checkin",
+                TaskLog.executed_at >= today_start,
+                TaskLog.executed_at < today_end,
+            ).order_by(TaskLog.executed_at.desc(), TaskLog.id.desc())
+        )
+        # 与签到短路逻辑保持一致，同一时间戳由较大的日志 ID 决定最新状态
+        for role_id, status in logs_result:
+            latest_statuses.setdefault(role_id, status)
+
+    signed = sum(status in ("success", "already_signed") for status in latest_statuses.values())
+    failed = sum(status == "failed" for status in latest_statuses.values())
+    risk = sum(status == "risk" for status in latest_statuses.values())
+    total_roles = len(role_ids)
+    # 无日志或最新状态无法识别均计入待签，四种状态互斥且总和等于角色基数
 
     return {
         "total_accounts": len(accounts),
@@ -182,5 +189,5 @@ async def get_today_status(
         "signed_today": signed,
         "failed_today": failed,
         "risk_today": risk,
-        "pending": max(0, total_roles - signed - failed - risk),
+        "pending": total_roles - signed - failed - risk,
     }

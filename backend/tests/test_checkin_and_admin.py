@@ -3101,6 +3101,102 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         self.assertEqual(zzz_logs.logs[0].game_biz, "nap_cn")
         self.assertEqual(unknown_logs.total, 3)
 
+    async def test_get_today_status_counts_only_latest_status_per_role(self):
+        async with await self._new_session() as session:
+            user = User(username="latest-status-user", password_hash="x")
+            session.add(user)
+            await session.flush()
+            account = MihoyoAccount(user_id=user.id)
+            session.add(account)
+            await session.flush()
+            # 每个场景独立断言，防止不同角色的错误计数互相抵消
+            scenarios = [
+                (["failed", "success"], "signed_today"),
+                (["risk", "success"], "signed_today"),
+                (["success", "failed"], "failed_today"),
+                (["failed", "failed", "failed"], "failed_today"),
+                (["already_signed"], "signed_today"),
+                (["risk"], "risk_today"),
+                (["success", "unknown"], "pending"),
+                ([], "pending"),
+            ]
+            for same_timestamp in (False, True):
+                for index, (statuses, expected_key) in enumerate(scenarios):
+                    with self.subTest(statuses=statuses, same_timestamp=same_timestamp):
+                        role = GameRole(account_id=account.id, game_biz="hk4e_cn",
+                                        game_uid=f"{same_timestamp}-{index}", is_enabled=True)
+                        session.add(role)
+                        await session.flush()
+                        for offset, status in enumerate(statuses):
+                            session.add(TaskLog(
+                                account_id=account.id, game_role_id=role.id,
+                                task_type="checkin", status=status,
+                                executed_at=datetime(2026, 3, 17, 1) + timedelta(
+                                    minutes=0 if same_timestamp else offset),
+                            ))
+                            await session.flush()
+                        with patch("app.api.tasks.get_shanghai_date", return_value=date(2026, 3, 17)):
+                            response = await get_today_status(user, session)
+                        expected = dict(total_accounts=1, total_roles=1, signed_today=0,
+                                        failed_today=0, risk_today=0, pending=0)
+                        expected[expected_key] = 1
+                        self.assertEqual(response, expected)
+                        role.is_enabled = False
+                        await session.flush()
+
+    async def test_get_today_status_filters_roles_tasks_users_and_day_range(self):
+        async with await self._new_session() as session:
+            user = User(username="filtered-status-user", password_hash="x")
+            other = User(username="other-status-user", password_hash="x")
+            session.add_all([user, other])
+            await session.flush()
+            account = MihoyoAccount(user_id=user.id)
+            other_account = MihoyoAccount(user_id=other.id)
+            session.add_all([account, other_account])
+            await session.flush()
+            roles = [
+                GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="1", is_enabled=True),
+                GameRole(account_id=account.id, game_biz="hkrpg_cn", game_uid="2", is_enabled=True),
+                GameRole(account_id=account.id, game_biz="hk4e_cn", game_uid="3", is_enabled=False),
+                GameRole(account_id=account.id, game_biz="unsupported", game_uid="4", is_enabled=True),
+                GameRole(account_id=other_account.id, game_biz="hk4e_cn", game_uid="5", is_enabled=True),
+            ]
+            session.add_all(roles)
+            await session.flush()
+            day_start = datetime(2026, 3, 16, 16)
+            day_end = datetime(2026, 3, 17, 16)
+            entries = [
+                (account.id, roles[0].id, "checkin", "success", day_start),
+                (account.id, roles[0].id, "checkin", "failed", day_end),
+                (account.id, roles[1].id, "checkin", "failed", day_start - timedelta(seconds=1)),
+                (account.id, roles[0].id, "other", "failed", day_start + timedelta(hours=1)),
+                (account.id, None, "checkin", "failed", day_start),
+                (account.id, roles[2].id, "checkin", "failed", day_start),
+                (account.id, roles[3].id, "checkin", "risk", day_start),
+                (other_account.id, roles[4].id, "checkin", "success", day_start),
+            ]
+            for account_id, role_id, task_type, status, executed_at in entries:
+                session.add(TaskLog(account_id=account_id, game_role_id=role_id,
+                                    task_type=task_type, status=status, executed_at=executed_at))
+            await session.flush()
+            with patch("app.api.tasks.get_shanghai_date", return_value=date(2026, 3, 17)):
+                response = await get_today_status(user, session)
+            self.assertEqual(response, dict(total_accounts=1, total_roles=2, signed_today=1,
+                                            failed_today=0, risk_today=0, pending=1))
+
+    async def test_get_today_status_returns_complete_fields_without_roles_or_accounts(self):
+        async with await self._new_session() as session:
+            user = User(username="empty-status-user", password_hash="x")
+            session.add(user)
+            await session.flush()
+            expected = dict(total_accounts=0, total_roles=0, signed_today=0,
+                            failed_today=0, risk_today=0, pending=0)
+            self.assertEqual(await get_today_status(user, session), expected)
+            session.add(MihoyoAccount(user_id=user.id))
+            await session.flush()
+            expected["total_accounts"] = 1
+            self.assertEqual(await get_today_status(user, session), expected)
+
     async def test_get_today_status_uses_east_eight_day_boundary(self):
         async with await self._new_session() as session:
             user = User(username="status-user", password_hash="x", role="user", is_active=True)
