@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { applyAuthorizationHeader } from '../src/api/authHeader.ts'
+import { AxiosHeaders } from 'axios'
+import { applyAuthorizationHeader, refreshAuthorizationHeaders } from '../src/api/authHeader.ts'
 import {
   getMenuDenyTarget,
   getVisibleMenus,
@@ -61,6 +62,21 @@ applyAuthorizationHeader(
 )
 assert.equal(axiosHeaderAuthorization, 'Bearer axios-token')
 
+for (const token of ['refresh-token', null, '']) {
+  const explicit = refreshAuthorizationHeaders(token)
+  for (const headers of [explicit, new AxiosHeaders(explicit)]) {
+    const config = applyAuthorizationHeader({ headers }, 'access-token')
+    assert.equal(AxiosHeaders.from(config.headers).get('Authorization'), token ? 'Bearer refresh-token' : '')
+  }
+}
+const lowercaseHeaders = { authorization: 'Bearer explicit-token' }
+applyAuthorizationHeader({ headers: lowercaseHeaders }, 'access-token')
+assert.deepEqual(lowercaseHeaders, { authorization: 'Bearer explicit-token' })
+const defaultAxiosHeaders = new AxiosHeaders({ 'Content-Type': 'application/json' })
+applyAuthorizationHeader({ headers: defaultAxiosHeaders }, 'access-token')
+assert.equal(defaultAxiosHeaders.get('Authorization'), 'Bearer access-token')
+assert.equal(defaultAxiosHeaders.get('Content-Type'), 'application/json')
+
 assert.equal(
   fs.existsSync(path.resolve(import.meta.dirname, '../src/views/HealthCenter.vue')),
   false,
@@ -85,6 +101,11 @@ assertSourceOmits(
 const apiSource = fs.readFileSync(
   path.resolve(import.meta.dirname, '../src/api/index.ts'),
   'utf8',
+)
+assertSourceMatches(
+  apiSource,
+  /refreshToken:\s*\(\)\s*=>\s*api\.post\('\/auth\/refresh',\s*undefined,\s*\{\s*headers:\s*refreshAuthorizationHeaders\(localStorage\.getItem\('refresh_token'\)\)/,
+  '刷新请求必须显式使用 refresh_token 请求头',
 )
 assertSourceOmits(
   apiSource,

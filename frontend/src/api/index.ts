@@ -7,7 +7,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
-import { applyAuthorizationHeader } from './authHeader'
+import { applyAuthorizationHeader, refreshAuthorizationHeaders } from './authHeader'
 
 const api = axios.create({
   baseURL: '/api',
@@ -50,7 +50,9 @@ export const authApi = {
   getRegisterOptions: () => api.get('/auth/register-options'),
   getMe: () => api.get('/auth/me'),
   updateMe: (data: any) => api.put('/auth/me', data),
-  refreshToken: () => api.post('/auth/refresh'),
+  refreshToken: () => api.post('/auth/refresh', undefined, {
+    headers: refreshAuthorizationHeaders(localStorage.getItem('refresh_token')),
+  }),
 }
 
 // ===== 账号 API =====

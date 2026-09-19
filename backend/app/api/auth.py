@@ -7,6 +7,7 @@
 """
 
 from datetime import timedelta
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select, func
@@ -24,7 +25,7 @@ from app.services.system_settings import SystemSettingsService
 from app.schemas.system_setting import RegisterOptionsResponse
 from app.schemas.user import (
     UserCreate, UserLogin, UserResponse, UserUpdate,
-    TokenResponse, TokenData,
+    TokenResponse,
 )
 from app.utils.timezone import utc_now
 
@@ -41,19 +42,42 @@ def create_token(data: dict, expires_delta: timedelta) -> str:
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
+def create_token_pair(user: User) -> TokenResponse:
+    """登录与刷新共用的令牌签发入口"""
+    return TokenResponse(
+        access_token=create_token(
+            {"user_id": user.id, "username": user.username, "role": user.role, "type": "access"},
+            timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        ),
+        refresh_token=create_token(
+            {"user_id": user.id, "type": "refresh"},
+            timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        ),
+    )
+
+
+def decode_token_user_id(token: str, expected_type: Literal["access", "refresh"]) -> int:
+    """校验令牌用途及必要身份字段，不接受旧的无类型访问令牌"""
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM],
+            options={"require_exp": True},
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="认证凭据已过期或无效")
+    user_id = payload.get("user_id")
+    # bool 也是 int 的子类，必须排除，避免异常标识被数据库隐式转换
+    if payload.get("type") != expected_type or type(user_id) is not int or user_id <= 0:
+        raise HTTPException(status_code=401, detail="无效的认证凭据")
+    return user_id
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Security(security_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """从请求头中的 JWT 解析并验证当前用户"""
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-        user_id: int = payload.get("user_id")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="无效的认证凭据")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="认证凭据已过期或无效")
+    user_id = decode_token_user_id(credentials.credentials, "access")
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -148,15 +172,7 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
-    access_token = create_token(
-        {"user_id": user.id, "username": user.username, "role": user.role},
-        timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-    )
-    refresh_token = create_token(
-        {"user_id": user.id, "type": "refresh"},
-        timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
-    )
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+    return create_token_pair(user)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -193,26 +209,11 @@ async def refresh_token(
     db: AsyncSession = Depends(get_db),
 ):
     """使用 refresh_token 换取新的 token 对"""
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-        if payload.get("type") != "refresh":
-            raise HTTPException(status_code=401, detail="需要 refresh token")
-        user_id = payload.get("user_id")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="refresh token 已过期或无效")
+    user_id = decode_token_user_id(credentials.credentials, "refresh")
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="用户不存在或已被禁用")
 
-    access_token = create_token(
-        {"user_id": user.id, "username": user.username, "role": user.role},
-        timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-    )
-    new_refresh = create_token(
-        {"user_id": user.id, "type": "refresh"},
-        timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
-    )
-    return TokenResponse(access_token=access_token, refresh_token=new_refresh)
+    return create_token_pair(user)

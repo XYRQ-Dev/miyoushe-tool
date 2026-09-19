@@ -10,6 +10,10 @@ export function applyAuthorizationHeader<
     headers?: Record<string, unknown> | { set?: (name: string, value: string) => void } | undefined
   },
 >(config: TConfig, token: string) {
+  // 显式认证头优先，包括空值，避免刷新凭据缺失时回退到访问令牌
+  if (Object.keys(config.headers ?? {}).some((name) => name.toLowerCase() === 'authorization')) {
+    return config
+  }
   const authorization = `Bearer ${token}`
 
   if (config.headers && typeof config.headers === 'object' && 'set' in config.headers) {
@@ -26,4 +30,8 @@ export function applyAuthorizationHeader<
   }
 
   return config
+}
+
+export function refreshAuthorizationHeaders(token: string | null) {
+  return { Authorization: token ? `Bearer ${token}` : '' }
 }
