@@ -611,6 +611,152 @@ class CheckinAndAdminTests(MySqlIsolatedAsyncioTestCase):
         service._sleep_between_info_and_sign.assert_awaited_once()
         service._sleep_between_roles.assert_awaited_once()
 
+    async def _assert_checkin_after_cookie_refresh(self, scenarios, *, cached_role=False):
+        async with await self._new_session() as session:
+            user = await self._create_user(session, "checkin-cookie-refresh-user")
+            accounts = []
+            roles_by_account = {}
+            for index, scenario in enumerate(scenarios):
+                account = MihoyoAccount(
+                    user_id=user.id,
+                    cookie_encrypted=encrypt_text(f"cookie_token=old-{index};"),
+                    cookie_status="unknown" if scenario == "verified" else "expired",
+                    stoken_encrypted=encrypt_text("test-stoken"),
+                    stuid=str(index + 1),
+                    mid=f"test-mid-{index}",
+                )
+                session.add(account)
+                await session.flush()
+                accounts.append(account)
+                roles = [
+                    GameRole(
+                        account_id=account.id,
+                        game_biz="hkrpg_cn",
+                        game_uid=f"{index + 1}000{role_index}",
+                        region="prod_gf_cn",
+                        is_enabled=True,
+                    )
+                    for role_index in range(2)
+                ]
+                session.add_all(roles)
+                await session.flush()
+                roles_by_account[account.id] = roles
+
+            cached = roles_by_account[accounts[0].id][0] if cached_role else None
+            if cached is not None:
+                session.add(TaskLog(
+                    account_id=cached.account_id,
+                    game_role_id=cached.id,
+                    task_type="checkin",
+                    status="success",
+                    message="签到成功",
+                    executed_at=utc_now_naive(),
+                ))
+            await session.commit()
+
+            scenario_by_id = dict(zip((account.id for account in accounts), scenarios))
+
+            async def verify_cookie(account):
+                scenario = scenario_by_id[account.id]
+                state = {"verified": "valid", "network_error": "network_error"}.get(scenario, "expired")
+                return {"state": state, "message": "网络异常，暂未确认失效" if state == "network_error" else state}
+
+            async def repair_cookie(account):
+                if scenario_by_id[account.id] == "reauth_required":
+                    account.credential_status = "reauth_required"
+                    return {"state": "reauth_required", "message": "根凭据已失效"}
+                account.cookie_encrypted = encrypt_text(f"cookie_token=repaired-{account.id};")
+                return {"state": "valid", "message": "工作 Cookie 已修复"}
+
+            async def checkin_role(account, role, cookie, client, device_state):
+                return CheckinResult(
+                    account_id=account.id,
+                    game_role_id=role.id,
+                    status="success",
+                    message="签到成功",
+                )
+
+            service = CheckinService(session)
+            service._ensure_device_state = AsyncMock(return_value=("device-id", "device-fp"))
+            service._checkin_role = AsyncMock(side_effect=checkin_role)
+            # 保留真实登录态分支，只替换外部校验、凭据换取、角色同步和通知边界
+            with patch.object(LoginStateService, "verify_cookie", new=AsyncMock(side_effect=verify_cookie)) as verify, patch(
+                "app.services.login_state.AccountCredentialService.ensure_work_cookie",
+                new=AsyncMock(side_effect=repair_cookie),
+            ) as repair, patch(
+                "app.services.login_state.refresh_account_roles",
+                new=AsyncMock(return_value={"roles_sync_status": "success", "roles_count": 2}),
+            ), patch(
+                "app.services.login_state.notification_service.send_reauth_required_notification",
+                new=AsyncMock(return_value=True),
+            ) as notify:
+                summary = await service.execute_for_user(user.id)
+
+            logs = (await session.execute(
+                select(TaskLog).where(TaskLog.account_id.in_([account.id for account in accounts]))
+            )).scalars().all()
+            expected_statuses = {}
+            expected_cookies = {}
+            for index, account in enumerate(accounts):
+                scenario = scenario_by_id[account.id]
+                for role in roles_by_account[account.id]:
+                    if cached is not None and role.id == cached.id:
+                        expected_statuses[role.id] = "already_signed"
+                    elif scenario in ("verified", "repaired"):
+                        expected_statuses[role.id] = "success"
+                        expected_cookies[role.id] = (
+                            f"cookie_token=old-{index};" if scenario == "verified"
+                            else f"cookie_token=repaired-{account.id};"
+                        )
+                    else:
+                        expected_statuses[role.id] = "failed"
+
+            self.assertEqual(summary.total, len(expected_statuses))
+            self.assertEqual(summary.success, len(expected_cookies))
+            self.assertEqual(summary.failed, list(expected_statuses.values()).count("failed"))
+            self.assertEqual(summary.already_signed, int(cached_role))
+            self.assertEqual(summary.risk, 0)
+            self.assertEqual({item.game_role_id: item.status for item in summary.results}, expected_statuses)
+            self.assertEqual(len(logs), len(expected_statuses))
+            self.assertEqual(
+                {log.game_role_id: log.status for log in logs},
+                {role_id: "success" if status == "already_signed" else status
+                 for role_id, status in expected_statuses.items()},
+            )
+            calls = service._checkin_role.await_args_list
+            self.assertEqual(len(calls), len(expected_cookies))
+            self.assertEqual({call.args[1].id: call.args[2] for call in calls}, expected_cookies)
+            self.assertEqual(verify.await_count, len(accounts))
+            self.assertEqual(repair.await_count, sum(s in ("repaired", "reauth_required") for s in scenarios))
+            self.assertEqual(notify.await_count, scenarios.count("reauth_required"))
+            self.assertEqual(service._ensure_device_state.await_count, int(bool(expected_cookies)))
+            messages = {item.game_role_id: item.message for item in summary.results}
+            for log in logs:
+                if log.status == "failed":
+                    self.assertEqual(log.message, messages[log.game_role_id])
+                    expected_message = (
+                        "根凭据已失效" if scenario_by_id[log.account_id] == "reauth_required" else "网络异常"
+                    )
+                    self.assertIn(expected_message, log.message)
+
+    async def test_execute_for_user_continues_after_unknown_cookie_verifies(self):
+        await self._assert_checkin_after_cookie_refresh(["verified"])
+
+    async def test_execute_for_user_uses_repaired_cookie_in_same_run(self):
+        await self._assert_checkin_after_cookie_refresh(["repaired"])
+
+    async def test_execute_for_user_logs_each_role_when_root_credentials_expire(self):
+        await self._assert_checkin_after_cookie_refresh(["reauth_required"])
+
+    async def test_execute_for_user_logs_each_role_when_cookie_verification_has_network_error(self):
+        await self._assert_checkin_after_cookie_refresh(["network_error"])
+
+    async def test_execute_for_user_continues_other_accounts_after_cookie_refresh_failure(self):
+        await self._assert_checkin_after_cookie_refresh(["reauth_required", "repaired", "network_error", "verified"])
+
+    async def test_execute_for_user_reuses_signed_role_and_repairs_cookie_for_pending_role(self):
+        await self._assert_checkin_after_cookie_refresh(["repaired"], cached_role=True)
+
     async def test_execute_for_user_reuses_today_success_log_without_calling_upstream(self):
         async with await self._new_session() as session:
             user = await self._create_user(session, "checkin-cache-success-user")

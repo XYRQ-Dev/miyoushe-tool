@@ -280,7 +280,8 @@ class CheckinService:
                                 )
                             )
                         await self.db.commit()
-                    continue
+                        continue
+                    # 校验或修复成功后继续本轮签到，并读取账号更新后的 Cookie
 
                 try:
                     cookie = decrypt_cookie(account.cookie_encrypted)
